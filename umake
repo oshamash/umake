@@ -1,0 +1,1680 @@
+#!/usr/bin/python3.6
+import time
+from colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
+
+# from pyinstrument import Profiler
+# profiler = Profiler()
+
+out = InteractiveOutput()
+
+class Timer:    
+    def __init__(self, msg, threshold=0, color=bcolors.OKGREEN):
+        self.msg = msg
+        self.postfix = ""
+        self.prefix = ""
+        self.threshold = threshold
+        self.color = color
+
+    def set_prefix(self, prefix):
+        self.prefix = prefix
+
+    def set_postfix(self, postfix):
+        self.postfix = postfix
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.time()
+        self.interval = self.end - self.start
+        if self.interval > self.threshold:
+            out.print_colored(f"[{self.interval:.3f}] {self.prefix} {self.msg} {self.postfix}", self.color)
+
+
+class MetadataCache:
+    def __init__(self, deps):
+        self.deps = deps
+
+
+def fs_lock(path):
+    lock_path = path + ".lock"
+    try:
+        fd = os.open(lock_path,  os.O_CREAT | os.O_EXCL)
+        return fd, lock_path
+    except FileExistsError:
+        return None, None
+
+
+def fs_unlock(fd, lock_path):
+    try:
+        os.close(fd)
+    finally:
+        os.remove(lock_path)
+
+
+with Timer("done imports"):
+    from subprocess import Popen, PIPE, check_output, TimeoutExpired
+    from os.path import join
+    from stat import S_ISDIR, S_IMODE
+    import os
+    import uuid
+    import shutil
+    import hashlib
+    from enum import Enum, IntEnum, auto
+    import pickle
+    import igraph
+    import pprint
+    import threading
+    from queue import Queue, Empty
+    from collections import OrderedDict
+    from itertools import chain
+    import shutil
+    import sys
+    import pywildcard as fnmatch
+    from minio import Minio, error  # takes 0.1 seconds, check what to do
+    from minio.helpers import (MAX_PART_SIZE,
+                      MAX_POOL_SIZE,
+                      MIN_PART_SIZE,
+                      DEFAULT_PART_SIZE,
+                      MAX_MULTIPART_COUNT)
+    import urllib3
+    import certifi
+    import io
+    import glob
+
+
+class Config:
+    def __init__(self):
+        self.json_file = None
+        self.interactive_output = False
+        self.remote_cache = True
+        self.local_cache = True
+        self.targets = []
+        self.variant = "default"
+
+
+global_config = Config()
+
+
+class MinioCache:
+    
+    BUCKET = "umake-build-cache"
+    def __init__(self):
+        self.n_timeouts = 0
+        ca_certs = certifi.where()
+        http = urllib3.PoolManager(
+                timeout=1,
+                maxsize=MAX_POOL_SIZE,
+                        cert_reqs='CERT_REQUIRED',
+                        ca_certs=ca_certs,
+                        retries=urllib3.Retry(
+                            total=3,
+                            backoff_factor=0.5,
+                            status_forcelist=[500, 502, 503, 504]
+                        )
+            )
+
+        self.mc = Minio("my-server",
+                       access_key='user', 
+                       secret_key='pass', 
+                       secure=False, 
+                       http_client=http)
+    
+    def _increase_timeout_and_check(self):
+        self.n_timeouts += 1
+        if self.n_timeouts >= 3:
+            out.print_fail(f"remote cache timedout {self.n_timeouts} time, disabling remote cahce")
+            global_config.remote_cache = False
+
+    def open_cache(self, cache_hash) -> MetadataCache:
+        cache_src = "md-" + cache_hash.hex()
+        try:
+            metadata_file = self.mc.get_object(bucket_name=self.BUCKET, object_name=cache_src)
+            metadata = pickle.loads(metadata_file.read())
+            return metadata
+        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
+            self._increase_timeout_and_check()
+            raise FileNotFoundError
+        except error.RequestTimeTooSkewed:
+            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
+            global_config.remote_cache = False
+            raise FileNotFoundError
+        except error.NoSuchKey:
+            raise FileNotFoundError
+    
+    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
+        cache_src = "md-" + cache_hash.hex()
+        md = pickle.dumps(metadata_cache, protocol=pickle.HIGHEST_PROTOCOL)
+        try:
+            self.mc.put_object(bucket_name=self.BUCKET, object_name=cache_src, data=io.BytesIO(md), length=len(md))
+        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
+            self._increase_timeout_and_check()
+        except error.RequestTimeTooSkewed:
+            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
+            global_config.remote_cache = False
+
+    def _get_chmod(self, src):
+        if hasattr(os, 'chmod'):
+            stat_func, chmod_func = os.stat, os.chmod
+            st = os.stat(src)
+            return st.st_mode
+        else:
+            return None
+
+    def _set_chmod(self, dst, st_mode):
+        os.chmod(dst, S_IMODE(st_mode))
+
+    def _get_cache(self, deps_hash, targets):
+        if deps_hash is None:
+            return False
+        cache_src = deps_hash.hex()
+        try:
+            for target in targets:
+                f = hashlib.sha1(target.encode("ascii")).hexdigest()
+                src = join(cache_src, f)
+                obj = self.mc.fget_object(bucket_name=self.BUCKET, object_name=src, file_path=target)
+                st_mode = int(obj.metadata["X-Amz-Meta-St_mode"])
+                self._set_chmod(target, st_mode)
+        except KeyError:
+            # some cases with minio that .metadata["X-Amz-Meta-St_mode"] is not exists
+            # the file will be pushed again after compilation
+            out.print_fail("metadata not exists")
+            return False
+        except error.NoSuchKey:
+            return False
+        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
+            self._increase_timeout_and_check()
+            return False
+        except error.RequestTimeTooSkewed:
+            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
+            global_config.remote_cache = False
+            return False
+            
+        return True
+
+    def _save_cache(self, deps_hash, targets):
+        cache_dst = deps_hash.hex()
+        # fd, lock_path = fs_lock(cache_dst)
+        # if fd == None:
+        #     return
+        try:
+            # shutil.rmtree(cache_dst, ignore_errors=True)
+            # os.mkdir(cache_dst)
+            for target in targets:
+                dst = join(cache_dst, hashlib.sha1(target.encode("ascii")).hexdigest())
+                file_attr = {"st_mode": self._get_chmod(target)}
+                self.mc.fput_object(bucket_name=self.BUCKET, object_name=dst, file_path=target, metadata=file_attr)
+        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
+            self._increase_timeout_and_check()
+        except error.RequestTimeTooSkewed:
+            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
+            global_config.remote_cache = False
+        finally:
+            # fs_unlock(fd, lock_path)
+            pass
+    
+    def get_cache_stats(self):
+        bucket_size = 0
+        n_objects = 0
+        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True): 
+            if obj.is_dir:
+                continue
+            bucket_size += obj.size
+            n_objects += 1
+        print(f"bucket size {int(bucket_size / 1024 / 1024)}MB, n_objects {n_objects}")
+
+    def clear_bucket(self):
+        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True): 
+            self.mc.remove_object(bucket_name=self.BUCKET, object_name=obj.object_name)
+        self.get_cache_stats()
+
+
+class FsCache:
+    
+    def __init__(self):
+        pass
+        
+    def open_cache(self, cache_hash) -> MetadataCache:
+        cache_src = join(UMAKE_BUILD_CACHE_DIR, "md-" + cache_hash.hex())
+        with open(cache_src, "rb") as metadata_file:
+            metadata = pickle.load(metadata_file)
+            return metadata
+
+
+    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
+        cache_src = join(UMAKE_BUILD_CACHE_DIR, "md-" + cache_hash.hex())
+        with open(cache_src, "wb") as metadata_file:
+            pickle.dump(metadata_cache, metadata_file, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def _get_cache(self, deps_hash, targets):
+        if deps_hash is None:
+            return False
+        cache_src = join(UMAKE_BUILD_CACHE_DIR, deps_hash.hex())
+        try:
+            for target in targets:
+                f = hashlib.sha1(target.encode("ascii")).hexdigest()
+                src = join(cache_src, f)
+                shutil.copyfile(src, target)
+                shutil.copymode(src, target)
+        except FileNotFoundError:
+            shutil.rmtree(cache_src, ignore_errors=True)
+            return False
+            
+        return True
+
+    def _save_cache(self, deps_hash, targets):
+        cache_dst = join(UMAKE_BUILD_CACHE_DIR, deps_hash.hex())
+        fd, lock_path = fs_lock(cache_dst)
+        if fd == None:
+            return
+        try:
+            shutil.rmtree(cache_dst, ignore_errors=True)
+            os.mkdir(cache_dst)
+            for target in targets:
+                dst = join(cache_dst, hashlib.sha1(target.encode("ascii")).hexdigest())
+                tmp_dst = f"{dst}.tmp"
+                # do "atomic" copy, in case the copy is interferred
+                shutil.copyfile(target, tmp_dst)
+                shutil.copymode(target, tmp_dst)
+                os.rename(tmp_dst, dst)
+        finally:
+            fs_unlock(fd, lock_path)
+
+    def gc(self):
+        def remove(path):
+            """ param <path> could either be relative or absolute. """
+            if os.path.isfile(path):
+                os.remove(path)  # remove the file
+            elif os.path.isdir(path):
+                shutil.rmtree(path)  # remove dir and all contains
+            else:
+                raise ValueError("file {} is not a file or dir.".format(path))
+
+        with Timer("done cache gc") as timer:
+            cache_dir_size_KB = get_size_KB(UMAKE_BUILD_CACHE_DIR)
+            high_thresh = cache_dir_size_KB * 1.1
+            low_tresh = UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 * 0.6
+            
+            if UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 > high_thresh:
+                return
+            
+            fd, lock_path = fs_lock(UMAKE_BUILD_CACHE_DIR)
+            if fd == None:
+                out.print_fail(f"\tcahce: {UMAKE_BUILD_CACHE_LOCK} is locked")
+                return
+            try:
+                cache_dir = check_output(['ls', '-lru', '--sort=time', UMAKE_BUILD_CACHE_DIR]).decode('utf-8')
+                for cache_line in cache_dir.splitlines():
+                    try:
+                        _, _, _, _, _, _, _, _, cache_entry_name = cache_line.split()
+                        cache_entry_full_path = join(UMAKE_BUILD_CACHE_DIR, cache_entry_name)
+                        remove(cache_entry_full_path)
+                        cache_entry_size = get_size_KB(UMAKE_BUILD_CACHE_DIR)
+                        if cache_entry_size < low_tresh:
+                            break
+                    except ValueError:
+                        pass
+                timer.set_postfix(f"freed {int((cache_dir_size_KB - cache_entry_size) / 1024)}MB")
+            finally:
+                fs_unlock(fd, lock_path)
+
+
+class CacheMgr:
+
+    class CacheType(IntEnum):
+        NOT_CACHED = 0
+        LOCAL = 1
+        REMOTE = 2
+    
+    fs_cache: FsCache = FsCache()
+    def __init__(self):
+        if global_config.remote_cache:
+            self.minio_cache = MinioCache()
+
+    def open_cache(self, cache_hash) -> MetadataCache:
+        try:
+            if global_config.local_cache:
+                return self.fs_cache.open_cache(cache_hash)
+            else:
+                raise FileNotFoundError
+        except FileNotFoundError:
+            if global_config.remote_cache:
+                return self.minio_cache.open_cache(cache_hash)
+            raise FileNotFoundError
+
+    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
+        if global_config.local_cache:
+            self.fs_cache.save_cache(cache_hash, metadata_cache)
+        if global_config.remote_cache:
+            self.minio_cache.save_cache(cache_hash, metadata_cache)
+
+    def _get_cache(self, deps_hash, targets):
+        ret = False
+        if global_config.local_cache:
+            ret = self.fs_cache._get_cache(deps_hash, targets)
+        if ret is False:
+            if global_config.remote_cache:
+                ret = self.minio_cache._get_cache(deps_hash, targets)
+                if ret is True:
+                    return CacheMgr.CacheType.REMOTE
+        else:
+            return CacheMgr.CacheType.LOCAL
+        return CacheMgr.CacheType.NOT_CACHED
+
+    def _save_cache(self, deps_hash, targets, local_only=False):
+        if global_config.local_cache:
+            self.fs_cache._save_cache(deps_hash, targets)
+        if local_only:
+            return
+        if global_config.remote_cache:
+            self.minio_cache._save_cache(deps_hash, targets)
+    
+    def gc(self):
+        self.fs_cache.gc()
+
+
+
+def byte_xor(ba1, ba2): 
+    return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)]) 
+
+
+
+class CmdFailedErr(RuntimeError):
+    pass
+
+
+class TargetExistsErr(RuntimeError):
+    pass
+
+
+class NotFileErr(RuntimeError):
+    pass
+
+
+class DepIsGenerated(RuntimeError):
+    pass
+
+class LineParseErr(RuntimeError):
+    pass
+
+
+class CmdExecuter:
+    def __init__(self, target, sources, cmd):
+        self.target = target
+        self.sources = sources
+        self.cmd: Cmd = cmd
+        self.dep_files = None
+        self.is_ok = False
+        self.is_from_cache: CacheMgr.CacheType = CacheMgr.CacheType.NOT_CACHED
+        
+        # cache state
+        """ in """
+        self.deps_hash = None
+        self.metadata_hash = None
+        self.cmd_hash = None
+        """ out """
+        self.dep_files_hashes = dict()
+    
+    def _check_in_root(self, check_str: str):
+        if check_str[0] == "/":
+            if check_str.startswith("/tmp/") or check_str.startswith("/dev/") or check_str.startswith("/proc/") or \
+               check_str.endswith(".pyc"):
+                return None
+            return check_str
+        return join(self.cmd.cmd_root, check_str)
+
+    def _parse_open(self, raw_path, args):
+        """
+        1234 open("/lib/x86_64-linux-gnu/libselinux.so.1", O_RDONLY|O_CLOEXEC) = 3
+        1234 open("libc.so.6", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+        """
+        rc_index = 5 if args[4] == "=" else 4
+        rc = int(args[rc_index])
+        if not rc >= 0:
+            return None
+        path = raw_path.split('"')[1]
+        return self._check_in_root(path)
+
+    def _parse_openat(self, raw_path, args):
+        """
+        21456 openat(AT_FDCWD, "/proc/sys/net/core/somaxconn", O_RDONLY|O_CLOEXEC) = 3
+        23456 openat(AT_FDCWD, "casdasd", O_WRONLY|O_CREAT|O_TRUNC, 0666) = 3
+        21460 openat(AT_FDCWD, "test/.dockerignore", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+        1168 openat(AT_FDCWD, "/usr/lib/x86_64-linux-gnu/libopcodes-2.30-system.so", O_RDONLY|O_CLOEXEC <unfinished ...>
+        """
+        if "<unfinished" == args[4]:
+            out.print_fail(f"unfinished: {args[0]} {args[2]}")
+            return None
+        rc_index = 6 if args[5] == "=" else 5
+        rc = int(args[rc_index])
+        if not rc >= 0:
+            return None
+        path = args[2].split('"')[1]
+        return self._check_in_root(path)
+
+    def make(self, cache_mgr: CacheMgr):
+        tmp_unique_name_full_path = join(UMKAE_TMP_DIR, str(uuid.uuid1()))
+        with Timer(self.cmd.compile_show(), color=bcolors.WARNING) as timer:
+            if self.target:
+                cache_type = cache_mgr._get_cache(self.deps_hash, self.target) 
+                if cache_type > CacheMgr.CacheType.NOT_CACHED:
+                    if cache_type == CacheMgr.CacheType.LOCAL:
+                        timer.set_prefix("[LOCAL-CACHE]")
+                    else:
+                        cache_mgr._save_cache(self.deps_hash, self.target, local_only=True)
+                        timer.set_prefix("[REMOTE-CACHE]")
+                    self.is_ok = True
+                    self.is_from_cache = cache_type
+                    return
+            strace_cmd = f"strace -o{tmp_unique_name_full_path} -f -e open,openat /bin/bash -c '{self.cmd.cmd}'"
+            self.proc = Popen(strace_cmd, env=MINIMAL_ENV, shell=True, stdout=PIPE, stderr=PIPE, cwd=self.cmd.cmd_root)
+            
+            while True:
+                try:
+                    stdout, stderr = self.proc.communicate(timeout=3)
+                    break
+                except TimeoutExpired:
+                    out.curr_job = self.cmd.summarized_show()
+                    out.update_bar()
+            rc = self.proc.poll()
+            
+            stdout = stdout.decode("utf-8")
+            stderr = stderr.decode("utf-8")
+
+            if rc != 0:
+                out.print_neutarl(stdout)
+                out.print_fail(stderr)
+                # TODO: print here the source of the command
+            else:
+                if stdout:
+                    out.print(stdout)
+                if stderr:
+                    out.print(stderr)
+                self.is_ok = True
+            
+
+            self.dep_files = set()
+            with open(tmp_unique_name_full_path) as strace_output:
+                for line in strace_output.readlines():
+                    args = line.split()
+                    raw_path = args[1]
+                    if not (raw_path.startswith('open(') or raw_path.startswith('openat(')):
+                        continue
+                    if raw_path.startswith('open('):
+                        full_path = self._parse_open(raw_path, args)
+                    else:
+                        full_path = self._parse_openat(raw_path, args)
+
+                    if full_path is None:
+                        continue
+                    full_path = os.path.realpath(full_path)
+                    # full_path = os.path.abspath(full_path)
+                    if full_path in self.dep_files:
+                        continue
+                    try:
+                        self.dep_files_hashes[full_path] = FileEntry.file_md5sum(full_path)
+                    except (IsADirectoryError, FileNotFoundError):
+                        # FileNotFoundError - might intermidiate file on filesystem that not exists
+                        continue
+                    self.dep_files.add(full_path)
+            if self.target:
+                if rc == 0 and not self.target.issubset(self.dep_files):
+                    raise RuntimeError(f"Target not generated: Expected {self.target} Got: {self.dep_files}")
+                self.dep_files -= self.target
+            
+                deps_hash = self.cmd_hash
+                for dep in self.dep_files:
+                    deps_hash = byte_xor(deps_hash, self.dep_files_hashes[dep])
+                cache_mgr._save_cache(deps_hash, self.target)
+                timer.set_prefix("[CACHED]")
+        
+    def get_results(self):
+        return self.dep_files, self.target
+
+
+def join_paths(root, rest):
+    if rest[0] == "/":
+        ret = join(ROOT, rest[1:])
+    else:
+        ret = join(root, rest)
+    return ret
+
+class FileEntry:
+
+    class EntryType(Enum):
+        GENERATED = auto()
+        CMD = auto()
+        FILE = auto()
+
+    def __init__(self, full_path, entry_type, data=None):
+        self.full_path = full_path
+        self.entry_type: FileEntry.EntryType = entry_type
+        self.mtime = 0
+        self.md5sum = None
+        self.is_modified = True
+        self.data: Cmd = data
+        self.dependencies_built = 0
+
+        if entry_type not in [self.EntryType.CMD, self.EntryType.GENERATED]:
+            self.update()
+        if entry_type == self.EntryType.CMD:
+            self.update_cmd()
+
+    def init(self):
+        self.dependencies_built = 0
+
+
+    def set_modified(self, new_value: bool):
+        self.is_modified = new_value
+    
+    def increase_dependencies_built(self, inc: int):
+        self.dependencies_built += inc
+
+    def update_cmd(self):
+        self.md5sum = hashlib.sha1(self.full_path.encode("ascii")).digest()
+
+    @staticmethod
+    def file_md5sum(full_path):
+        with open(full_path, "rb") as file_to_check:
+            data = file_to_check.read()    
+            md5_returned = hashlib.sha1(data).digest()
+            return md5_returned
+
+    def update(self):
+        modified = False
+        stat = os.stat(self.full_path)
+        if S_ISDIR(stat.st_mode):
+            raise NotFileErr(f"failed to get info for {self.full_path}")
+        new_mtime = int(stat.st_mtime * 100000)
+        if new_mtime != self.mtime:
+            new_md5sum = self.file_md5sum(self.full_path)
+            if new_md5sum != self.md5sum:
+                self.set_modified(True)
+                modified = True
+
+            self.md5sum  = new_md5sum
+        self.mtime = new_mtime
+        return modified
+    
+    def delete_fs(self):
+        out.print_file_deleted(self.full_path, "DELETING")
+        try:
+            os.remove(self.full_path)
+        except FileNotFoundError:
+            pass
+    
+    def update_with_md5sum(self, new_md5sum):
+        stat = os.stat(self.full_path)
+        self.mtime = int(stat.st_mtime * 100000)
+        self.md5sum = new_md5sum
+
+    def __str__(self):
+        return f"{self.full_path}: {self.data.conf_deps}"
+    
+    def __repr__(self):
+        return f"['{self.full_path}': '{self.is_modified}']"
+
+
+class Line:
+    def __init__(self, filename, line_num, line):
+        self.filename = filename
+        self.line_num = line_num
+        self.line = line
+    
+    def __str__(self):
+        return f"{self.filename}:{self.line_num}\n\t{self.line}"
+
+
+class Cmd:
+
+    def __init__(self, cmd, dep, manual_deps, target, line, cmd_root):
+        self.cmd = cmd
+        self.dep = dep
+        self.manual_deps = manual_deps
+        self.conf_deps = set(dep)
+        self.target: set = target
+        self.cmd_root = cmd_root
+
+        self.line: Line = line
+
+    def compile_show(self):
+        return " ".join(sorted(self.target))
+    
+    def summarized_show(self):
+        return " ".join([os.path.basename(target) for target in sorted(self.target)])
+
+    def update(self, other):
+        self.line = other.line
+    
+    def __eq__(self, other):
+        return self.cmd == other.cmd and \
+               self.dep == other.dep and \
+               self.target == other.target
+
+
+class GraphDB:
+
+    def __init__(self, db_version):
+        self.nodes = dict() 
+        self.graph = igraph.Graph(directed=True)
+        self.last_cmds = set()
+        self.db_version = db_version
+
+    def sub_graph_nodes(self, sub_nodes=[]):
+        if sub_nodes == []:
+            return [key for key, fentry in self.nodes.items() if fentry.entry_type != FileEntry.EntryType.CMD]
+        
+        vertecies = set()
+        for node in sub_nodes:
+            try:
+                idx_node = self.graph.vs.find(node).index
+                for x in self.graph.subcomponent(idx_node, mode="in"):
+                    name = self.graph.vs[x]["name"]
+                    if self.nodes[name].entry_type != FileEntry.EntryType.CMD:
+                        vertecies.add(name)
+            except ValueError:
+                continue
+        return vertecies
+
+    def is_exists(self, node):
+        return node in self.nodes
+
+    def add_node(self, node, data: FileEntry):
+        if node not in self.nodes:
+            self.graph.add_vertex(node)
+        self.nodes[node] = data
+
+    def add_connection(self, from_node, to_node):
+        if not self.graph.are_connected(from_node, to_node):
+            self.graph.add_edge(from_node, to_node)
+
+    def add_connections(self, connections):
+        connections = [(from_node, to_node) for (from_node, to_node) in connections \
+                            if not self.graph.are_connected(from_node, to_node)]
+        self.graph.add_edges(connections)
+    
+    def remove_connections(self, connections):
+        self.graph.delete_edges(connections)
+        for dep, target in connections:
+            try:
+                vert = self.graph.vs.find(dep)
+            except ValueError:
+                # it might not be exists
+                pass
+            if vert.degree() == 0:
+                self.graph.delete_vertices(vert.index)
+                del self.nodes[dep]
+
+    def get_data(self, node) -> FileEntry:
+        return self.nodes[node]
+
+    def dump_graph(self):
+        with open(UMAKE_DB, "wb") as db_file:
+            pickle.dump(self, db_file, protocol=pickle.HIGHEST_PROTOCOL)
+
+    def init(self):
+        for node in self.get_nodes():
+            fentry: FileEntry = self.get_data(node)
+            if fentry.entry_type == FileEntry.EntryType.CMD:
+                self.last_cmds.add(node)
+            elif fentry.entry_type == FileEntry.EntryType.FILE:
+                fentry.init()
+
+    @staticmethod
+    def load_graph(): 
+        pathname = os.path.realpath(__file__)
+        db_file_entry = FileEntry(pathname, FileEntry.EntryType.FILE)
+        db_version = db_file_entry.md5sum
+        try:
+            with open(UMAKE_DB, "rb") as db_file:
+                data: GraphDB = pickle.load(db_file)
+                if data.db_version != db_version:
+                    out.print_file_deleted(f"umake changed deleting db {UMAKE_DB}")
+                    os.remove(UMAKE_DB)
+                    return GraphDB(db_version)
+                return data
+        except FileNotFoundError:
+            return GraphDB(db_version)
+    
+    def get_nodes(self, wanted_type=None):
+        for name, node in self.nodes.items():
+            if wanted_type:
+                if node.entry_type == wanted_type:
+                    yield name
+            else:
+                yield name
+
+    def predecessors(self, node):
+        for pred in self.graph.vs.find(node).predecessors():
+            yield pred["name"]
+
+    def successors(self, node):
+        for succ in self.graph.vs.find(node).successors():
+            yield succ["name"]
+
+    def remove_node(self, nodes):
+        if type(nodes) is not set:
+            nodes = set([nodes])
+        indecies = list()
+        for node in nodes:
+            del self.nodes[node]
+            indecies.append(self.graph.vs.find(node).index)
+        self.graph.delete_vertices(indecies)
+    
+    def topological_sort(self):
+        return [self.graph.vs[i]["name"] for i in self.graph.topological_sorting()]
+    
+    def subgraph_topological_sort(self, sub_nodes):
+        vertecies = set()
+        for node in sub_nodes:
+            try:
+                idx_node = self.graph.vs.find(node).index
+                vertecies.update(self.graph.subcomponent(idx_node, mode="in"))
+            except ValueError:
+                continue
+        
+        sub_graph = self.graph.subgraph(vertecies)
+        return [sub_graph.vs[i]["name"] for i in sub_graph.topological_sorting()]
+
+
+class CmdTemplate:
+
+    def __init__(self, target, cmd, sources_fmt, deps_fmt, line_num, line, foreach, umakefile, cmd_root):
+        self.targets_fmt = target
+        self.cmd_fmt = cmd
+        self.sources_fmt = sources_fmt
+        self.deps_fmt = deps_fmt
+        self.line = Line(umakefile, line_num, line)
+        self.foreach = foreach
+        self.root = cmd_root
+
+        self.cmds = list()
+        self.fs_files = set()
+
+    def _iterate_file_glob(self, graph, fmt, all_targets):
+        current_files = set()
+        for full_path in glob.iglob(join_paths(self.root, fmt), recursive=True):
+            if full_path not in all_targets:
+                if not (graph.is_exists(full_path) and graph.get_data(full_path).entry_type == FileEntry.EntryType.GENERATED):
+                    current_files.add(full_path)
+        self.fs_files.update(current_files)
+        return current_files
+
+    def _create_foreach_cmd(self, files, manual_deps, all_targets, graph: GraphDB):
+        for full_path in files:
+            deps = set()
+            deps.update(manual_deps)
+            deps.add(full_path)
+            basename = os.path.basename(full_path)
+            dirname = os.path.dirname(full_path)
+            noext = os.path.splitext(basename)[0]
+            parent_dir = os.path.basename(dirname)
+            if self.targets_fmt:
+                targets = set()
+                for target_fmt in self.targets_fmt:
+                    target = target_fmt.format(filename=full_path,
+                                                dir=dirname,
+                                                basename=basename,
+                                                noext=noext,
+                                                parent_dir=parent_dir)
+                    if not (full_path and target.startswith(ROOT)):
+                        target = join_paths(self.root, target)
+                    targets.add(target)
+                    if target in all_targets:
+                        raise RuntimeError(f"Failed parsing {self.line}\nTarget {target} already exists, two commands can't generate same target")
+                all_targets.update(targets)
+                cmd = self.cmd_fmt.format(filename=full_path,
+                                        dir=dirname,
+                                        basename=os.path.basename(full_path),
+                                        noext=noext,
+                                        target=target)
+                self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root))
+            else:
+                cmd = self.cmd_fmt.format(filename=full_path,
+                                            dir=dirname,
+                                            basename=os.path.basename(full_path),
+                                            noext=noext)
+                self.cmds.append(Cmd(cmd, deps, manual_deps, {}, self.line, self.root))
+
+    def create_cmds(self, graph: GraphDB, all_targets: set):
+        full_path = None
+        target = None
+        manual_deps = set()
+
+        for dep_fmt in self.deps_fmt:
+            added = False
+            for global_target in all_targets:
+                dep_fmt_fullpath = join_paths(self.root, dep_fmt)
+                if fnmatch.fnmatch(global_target, dep_fmt_fullpath):
+                    manual_deps.add(global_target)
+                    added = True
+        
+            if added == False:
+                raise RuntimeError(f"{self.line}: manual dep '{dep_fmt}' is not exists as target in other commands")
+
+        if self.foreach:
+            for source_fmt in self.sources_fmt:
+                generated_sources = set()
+                for global_target in all_targets:
+                    src_fmt_fullpath = join_paths(self.root, source_fmt)
+                    if fnmatch.fnmatch(global_target, src_fmt_fullpath):
+                        generated_sources.add(global_target)
+                files = self._iterate_file_glob(graph, source_fmt, all_targets)
+                files.update(generated_sources)
+                self._create_foreach_cmd(files, manual_deps, all_targets, graph)
+                    
+        else:
+            deps = set()
+            sources = set()
+            generated_sources = set()
+            
+            deps.update(manual_deps)
+            fs_sources = []
+            for source_fmt in self.sources_fmt:
+                is_found = False
+                fs_sources =  self._iterate_file_glob(graph, source_fmt, all_targets)
+                sources.update(fs_sources)
+                if fs_sources:
+                    is_found = True
+
+                source_fmt_fullpath = join_paths(self.root, source_fmt)
+                source_dir = os.path.dirname(source_fmt_fullpath)
+                for global_target in all_targets:
+                    if fnmatch.fnmatch(global_target, source_fmt_fullpath):
+                        is_found = True
+                        generated_sources.add(global_target)
+
+                if is_found is False:
+                    raise RuntimeError(f"[{source_fmt_fullpath}] {self.line}:\n \t\tsource mentioned in umakefile not exists")
+
+            targets = set()
+            if self.targets_fmt:
+                basename = None
+                noext = None
+                dirname = None
+                parent_dir = None
+                
+                if fs_sources:
+                    full_path = sorted(fs_sources)[0]
+                
+                if full_path is not None:
+                    basename = os.path.basename(full_path)
+                    noext = os.path.splitext(basename)[0]
+                    dirname = os.path.dirname(full_path)
+                    parent_dir = os.path.basename(dirname)
+
+                for target_fmt in self.targets_fmt:
+                    target = target_fmt.format(filename=full_path,
+                                            dir=dirname,
+                                            basename=basename,
+                                            noext=noext,
+                                            parent_dir=parent_dir)
+                    if not (full_path and target.startswith(ROOT)):
+                        target = join_paths(self.root, target)
+                    targets.add(target)
+                target_exists = targets.intersection(all_targets)
+                if target_exists:
+                    raise RuntimeError(f"Target {target_exists} already exists, two commands can't generate same target")
+            all_targets.update(targets)
+            sources.update(generated_sources)
+            filename = " ".join(sorted(sources))
+            cmd = self.cmd_fmt.format(filename=filename,
+                                      target=" ".join(sorted(targets)))
+            deps.update(sources)
+            deps.update(generated_sources)
+            self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root))
+        
+
+def find_between(string, token_start, token_end):
+    state = "find_token_start"
+    start_idx = None
+    for idx, ch in enumerate(string):
+        if state == "find_token_start":
+            if ch == token_start:
+                state = "find_token_end"
+                start_idx = idx
+        elif state == "find_token_end":
+            if ch == token_end or idx == len(string) - 1:
+                token = string[start_idx:idx+1].strip()
+                if not token == "":
+                    yield token
+                state = "find_token_start"
+
+
+class UMakeFileParser():
+    """
+    HELLO = 1
+    : a.c > gcc {filename} -o {target} > {filename}.o  
+    : > gcc {filename} -o {target} > {filename}.o  
+    :foreach *.c > gcc {filename} -o {target} > {basename}.o  
+    :foreach | sdf > gcc {filename} -o {target} > {basename}.o  
+    """
+    def __init__(self, filename):
+        self.fielanme = filename
+        self.cmds_template: [CmdTemplate] = []
+
+        self.load_file(filename)
+        self.globals_vars = dict()
+        self.macros = dict()
+        self.parse_file(filename)
+    
+    def load_file(self, filename):
+        with open(filename, mode="r") as umakefile:
+            return umakefile.read()
+
+    def parse_file(self, umakefile, workdir=ROOT, in_variant=False, use_current_variant=False):
+        
+        if workdir is None:
+            workdir = ROOT
+
+        def should_line_parsing_stopped(in_variant, use_current_variant):
+            return in_variant and not use_current_variant
+        
+        for line_num, line in enumerate(self.load_file(join(workdir, umakefile)).splitlines()):
+            try:
+                foreach = False
+                deps_fmt = []
+                source_fmt = []
+                
+                if line == "" or line[0] == "#":
+                    if line == "" and in_variant:
+                        in_variant = False
+                        use_current_variant = False
+                    continue
+                
+                if line[0] == ":":
+                    if should_line_parsing_stopped(in_variant, use_current_variant):
+                        continue
+                    for macro_call in find_between(line, "!", ")"):
+                        """ macro call - !gcc($x,$y,$z)"""
+                        macro_name, macro_args_sent = macro_call.split("(", 1)
+                        macro_args = self.macros[macro_name][0]
+                        macro_args_sent = macro_args_sent[:-1].split(",")
+                        macro_body = self.macros[macro_name][1]
+                        macro_args_defaults = self.macros[macro_name][2]
+                        if macro_args_sent == ['']:
+                            macro_args_sent = []
+                        
+                        for idx, in_macro_args in enumerate(macro_args):
+                            try:
+                                sent_arg = macro_args_sent[idx]
+                            except IndexError:
+                                sent_arg = macro_args_defaults[idx]
+
+                            sent_arg = sent_arg.strip()
+                            try:
+                                if sent_arg == "":
+                                    send_arg_value = ""
+                                elif sent_arg[0] == "$":
+                                    send_arg_value = self.globals_vars[sent_arg]
+                                else:
+                                    send_arg_value = sent_arg
+                            except KeyError:
+                                raise RuntimeError(f"{umakefile}:{line_num} macro {macro_name} called with not exists arg: {macro_args_sent}")
+                            macro_body = macro_body.replace(in_macro_args, send_arg_value)
+
+                        line = line.replace(macro_call, macro_body)
+                    sources_cand, cmd_fmt, targets_fmt = line.split(">")
+                    sources_cand = sources_cand.split()
+                    targets_fmt = targets_fmt.split()
+                    if len(sources_cand) == 1:
+                        pass
+                        # No sources
+                    else:
+                        deps_index = len(sources_cand)
+                        try:
+                            deps_index = sources_cand.index("|")
+                            deps_fmt = sources_cand[deps_index + 1:]
+                            # resolve $var
+                            resolved_manual_deps = []
+                            remove_indexs = []
+                            for idx, manual_dep in enumerate(deps_fmt):
+                                if manual_dep[0] == "$":
+                                    resolved_manual_deps.extend(self.globals_vars[manual_dep].split())
+                                    remove_indexs.append(idx)
+                            for idx in remove_indexs:
+                                del deps_fmt[idx]
+                            deps_fmt.extend(resolved_manual_deps)
+                        except ValueError:
+                            pass
+
+                        foreach = True if sources_cand[0] == ":foreach" else False
+                        source_fmt = sources_cand[1:deps_index]
+                    if workdir:
+                        if not os.path.isdir(workdir):
+                            RuntimeError(f"path is not directory {workdir}")
+                        cmd_root = workdir
+                    else:
+                        cmd_root = ROOT
+                    self.cmds_template.append(CmdTemplate(targets_fmt, cmd_fmt.strip(), source_fmt,
+                                                          deps_fmt, line_num, line, foreach, umakefile, cmd_root))
+                elif line[0] == "!":
+                    if should_line_parsing_stopped(in_variant, use_current_variant):
+                        continue
+                    args = list()
+                    defaults = list()
+                    """ !compile-c(a, b, c=$sdf) : gcc -c -fPIC {filename} -o {target} > {dir}/{noext}.o """
+                    macro_decl, macro_body = line.split(":", 1)
+                    macro_decl = macro_decl.replace(" ", "")
+                    macro_name, marco_args = macro_decl.strip().split("(")
+                    marco_args = marco_args[:-1]  # remove ending )
+                    marco_args = marco_args.split(",")
+                    if marco_args != ['']:
+                        for arg in marco_args:
+                            # get defaults
+                            try:
+                                arg_name, arg_default = arg.split("=")
+                            except ValueError:
+                                arg_name = arg
+                                arg_default = ""
+                            args.append(f"${arg_name}")
+                            defaults.append(arg_default)
+                    self.macros[macro_name] = (args, macro_body.strip(), defaults)
+                elif line[0] == "$":
+                    if should_line_parsing_stopped(in_variant, use_current_variant):
+                        continue
+                    try:
+                        var_name, var_body = line.split("+=", 1)
+                        for var_to_replace in find_between(var_body, "$", " "):
+                            var_body = var_body.replace(var_to_replace, self.globals_vars[var_to_replace])
+                        try:
+                            self.globals_vars[var_name.strip()] += f" {var_body.strip()}"
+                        except KeyError:
+                            raise RuntimeError(f"{line_num}: {line}, var {var_name.strip()} was not declared")
+                    except ValueError:
+                        var_name, var_body = line.split("=", 1)
+                        for var_to_replace in find_between(var_body, "$", " "):
+                            var_body = var_body.replace(var_to_replace, self.globals_vars[var_to_replace])
+                        self.globals_vars[var_name.strip()] = var_body.strip()
+                elif line[0] == "[":
+                    if line[-1] != "]":
+                        raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
+                    if should_line_parsing_stopped(in_variant, use_current_variant):
+                        continue
+                    config_name, config_value = line[1:-1].split(":")
+                    config_name = config_name.strip()
+                    config_value = config_value.strip()
+                    if config_name == "variant":
+                        if in_variant:
+                            raise RuntimeError(f"{line_num}: {line} \n cannot configure variant in variant")
+                        in_variant = True
+                        if global_config.variant == config_value:
+                            use_current_variant = True
+                    elif config_name == "workdir":
+                        if config_value == "/":
+                            workdir = None
+                        else:
+                            workdir = join(ROOT, config_value)
+                    elif config_name == "include":
+                        self.parse_file(config_value, workdir, in_variant, use_current_variant)
+                        
+                else:
+                    raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
+                    
+
+            except:
+                out.print_fail(f"ERROR failed to parse UMakefile")
+                out.print_fail(f"{umakefile}:{line_num}")
+                out.print_fail(f"   {line}")
+                raise
+
+
+class UMake:
+
+    def __init__(self):
+        self.cache_mgr = CacheMgr()
+
+        self.graph = None
+
+        self._start_executer_thread()
+    
+    def _init_build(self):
+        shutil.rmtree(UMKAE_TMP_DIR, ignore_errors=True)
+        os.makedirs(UMKAE_TMP_DIR, exist_ok=True)
+        os.makedirs(UMAKE_BUILD_CACHE_DIR, exist_ok=True)
+
+    def _start_executer_thread(self):
+        self.jobs_queue = Queue() # CmdExecuter
+        self.done_queue = Queue()
+        self.n_jobs = 0
+        for _ in range(UMAKE_MAX_WORKERS):
+            exec_thread = threading.Thread(target=self.executer_thread, daemon=True)
+            exec_thread.start()
+
+    def _get_file_entry(self, full_path):
+        return FileEntry(full_path, FileEntry.EntryType.FILE)
+
+    def _is_in_blacklist(self, path):
+        if "/." in path:
+            return True
+        if path[0] == '.':
+            return True
+        return False
+
+    def _remove_generated_from_graph(self, deleted_gen, delete_set):
+        out.print_file_deleted(deleted_gen)
+        fentry = self.graph.get_data(deleted_gen)
+        fentry.set_modified(True)
+        for pred_deleted_gen in self.graph.predecessors(deleted_gen):
+            pred_fentry = self.graph.get_data(pred_deleted_gen)
+            pred_fentry.set_modified(True)
+        # self.graph.remove_node(deleted_gen)
+        delete_set.add(deleted_gen)
+        fentry.delete_fs()
+
+    def _remove_file_from_graph(self, delete_file, delete_set):
+        succs = list(self.graph.successors(delete_file))
+        for succ in succs:
+            fentry = self.graph.get_data(succ)
+            fentry.set_modified(True)
+
+        out.print_file_deleted(delete_file)
+        # self.graph.remove_node(delete_file)
+        delete_set.add(delete_file)
+
+    def scan_fs(self):
+        with Timer("done filesystem scan"):
+            graph_fs = self.graph.sub_graph_nodes(global_config.targets)
+            deleted_set = set()
+            for f in graph_fs:
+                if f in deleted_set:
+                    continue
+                fentry: FileEntry = self.graph.get_data(f)
+                try:
+                    if fentry.update():
+                        for pred_deleted_gen in self.graph.predecessors(f):
+                            pred_entry = self.graph.get_data(pred_deleted_gen)
+                            pred_entry.set_modified(True)
+                        out.print_file_updated(f)
+                except FileNotFoundError:
+                    if fentry.entry_type == FileEntry.EntryType.GENERATED:
+                        self._remove_generated_from_graph(f, deleted_set)
+                    elif fentry.entry_type == FileEntry.EntryType.FILE:
+                        self._remove_file_from_graph(f, deleted_set)
+                    else:
+                        raise RuntimeError(f"trying to delete not file but {fentry.entry_type}. how can it be???")
+            self.graph.remove_node(deleted_set)
+
+    def _graph_remove_cmd_node(self, cmd: Cmd, connection):
+        delete = set()
+        for conn in connection:
+            if cmd.cmd in conn:
+                delete.add(conn)
+        for del1 in delete:
+            connection.remove(del1)
+        self.graph.remove_node(cmd.cmd)
+    
+    def _graph_add_cmd_node(self, cmd: Cmd, connections: set):
+        fentry_cmd = FileEntry(cmd.cmd, FileEntry.EntryType.CMD, cmd)
+        self.graph.add_node(cmd.cmd, fentry_cmd)
+        
+        for target in cmd.target:
+            self.graph.add_node(target, FileEntry(target, FileEntry.EntryType.GENERATED, cmd))
+            connections.add((cmd.cmd, target))
+        for dep in cmd.dep:
+            connections.add((dep, cmd.cmd))
+
+    def _graph_update_cmd_node(self, old_cmd: Cmd, new_cmd: Cmd, fentry_cmd: FileEntry, connections: set):
+        if old_cmd != new_cmd:
+            self._graph_remove_cmd_node(old_cmd, connections)
+            self._graph_add_cmd_node(new_cmd, connections)
+        else:
+            old_cmd.update(new_cmd)
+
+        for target in new_cmd.target:
+            if not self.graph.is_exists(target):
+                self.graph.add_node(target, FileEntry(target, FileEntry.EntryType.GENERATED, new_cmd))
+            connections.add((new_cmd.cmd, target))
+        
+        for dep in new_cmd.dep:
+            connections.add((dep, new_cmd.cmd))
+
+    def parse_cmd_files(self):
+        with Timer("done parsing UMakefile"):
+            last_cmds = self.graph.last_cmds
+            all_targets = set()
+            UMakefile = join(ROOT , "UMakefile")
+            umakefile = UMakeFileParser(UMakefile)
+
+            cmd_template: CmdTemplate
+            cmds = set()
+            for cmd_template in umakefile.cmds_template:
+                cmd_template.create_cmds(self.graph, all_targets)
+                cmd: Cmd
+                for f in cmd_template.fs_files:
+                    if not self.graph.is_exists(f):
+                        new_fentry = self._get_file_entry(f)
+                        self.graph.add_node(f, new_fentry)
+                for cmd in cmd_template.cmds:
+                    if self.graph.is_exists(cmd.cmd):
+                        cmd_fentry = self.graph.get_data(cmd.cmd)
+                    cmds.add(cmd.cmd)
+            removed_cmds = last_cmds.difference(cmds)
+
+            delete_nodes = set()
+            for remove_cmd in removed_cmds:
+                remove_cmd_list = list(self.graph.successors(remove_cmd))
+                for target_file in remove_cmd_list:
+                    if self.graph.is_exists(target_file):
+                        succseccors = self.graph.successors(target_file)
+                        for succ in succseccors:
+                            fentry = self.graph.get_data(succ)
+                            fentry.data.dep.remove(target_file)
+
+                        target_fentry = self.graph.get_data(target_file)
+                        target_fentry.delete_fs()
+                        delete_nodes.add(target_file)
+                        # self.graph.remove_node(target_file)
+                # self.graph.remove_node(remove_cmd)
+                delete_nodes.add(remove_cmd)
+            self.graph.remove_node(delete_nodes)
+            
+            connections = set()
+            for cmd_template in umakefile.cmds_template:
+                for cmd in cmd_template.cmds:
+                    if cmd.cmd in removed_cmds:
+                        continue
+                    if cmd.cmd in last_cmds:
+                        fentry_cmd: FileEntry = self.graph.get_data(cmd.cmd)
+                        self._graph_update_cmd_node(fentry_cmd.data, cmd, fentry_cmd, connections)
+                    else:
+                        self._graph_add_cmd_node(cmd, connections)
+            self.graph.add_connections(connections)
+
+            # check target request exists
+            if global_config.targets:
+                all_targets_exists = any(target in all_targets for target in global_config.targets)
+                if not all_targets_exists:
+                    raise RuntimeError(f"target not exist {global_config.targets}")
+    
+    def executer_thread(self):
+        cache_mgr = CacheMgr()
+        while True:
+            executer: CmdExecuter
+            executer = self.jobs_queue.get()
+            out.n_active_workers.inc()
+            out.curr_job = executer.cmd.summarized_show()
+            out.print(f"{executer.cmd.cmd}")
+            try:
+                executer.make(cache_mgr)
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                out.print(e)
+                executer.is_ok = False
+            out.n_active_workers.dec()
+            self.done_queue.put(executer)
+
+    def _handle_done(self, add_conns_out, del_conns_out):
+        execucter: CmdExecuter
+        execucter = self.done_queue.get()
+        self.n_jobs -= 1
+        if execucter.is_ok is False:
+            raise CmdFailedErr(f"command failed: {execucter.cmd.line}\n cmd:\n\t {execucter.cmd.cmd}")
+        
+        deps, targets = execucter.get_results()
+        node = execucter.cmd.cmd
+
+        node_entry: FileEntry = self.graph.get_data(node)
+        node_entry.set_modified(False)
+        out.n_works_done += 1
+        if execucter.is_from_cache:
+            if execucter.is_from_cache == CacheMgr.CacheType.LOCAL:
+                out.n_local_hits +=1
+            if execucter.is_from_cache == CacheMgr.CacheType.REMOTE:
+                out.n_remote_hits +=1
+        conns = []
+        preds = set(self.graph.predecessors(node))
+        for dep in deps:
+            if self.graph.is_exists(dep):
+                dep_fentry: FileEntry = self.graph.get_data(dep)
+                if dep_fentry.entry_type == FileEntry.EntryType.GENERATED and dep not in preds:
+                    out.print_fail(f"at line: {execucter.cmd.line}")
+                    out.print_fail(f"\t'{node}' :\n have generated dependency '{dep}'")
+                    out.print_fail(f"from line: {dep_fentry.data.line}")
+                    out.print_fail(f"add to line: {execucter.cmd.line}")
+                    out.print_fail(f"{dep} as a manual dependency")
+                    raise DepIsGenerated()
+                if execucter.dep_files_hashes:
+                    dep_fentry.update_with_md5sum(execucter.dep_files_hashes[dep])
+                else:
+                    dep_fentry.update()
+            else:
+                try:
+                    fentry = FileEntry(dep, FileEntry.EntryType.FILE)
+                    fentry.set_modified(False)
+                except NotFileErr as e:
+                    out.print(e)
+                    continue
+                self.graph.add_node(dep, fentry)
+            
+            if not self.graph.graph.are_connected(dep, node):
+                conns.append((dep, node))
+        # with Timer(f"connections {execucter.cmd.summarized_show()}: {len(conns)}", color=bcolors.FAIL):
+        #     self.graph.add_connections(conns)
+        add_conns_out.extend(conns)
+        
+        del_cons = set()
+        # kepp user conigured deps
+        preds = preds - execucter.cmd.dep
+        deleted_autodeps = preds - deps
+        for del_autodep in deleted_autodeps:
+            del_cons.add((del_autodep, node))
+        # self.graph.remove_connections(del_cons)
+        del_conns_out.extend(del_cons)
+
+        for target in targets:
+            target_node = self.graph.get_data(target)
+            target_node.increase_dependencies_built(-1)
+            target_node.update()
+        
+        if targets and not execucter.is_from_cache:
+            self._set_deps_hash(node_entry, execucter)
+
+        if self.n_jobs == 0:
+            return False
+        else:
+            return True
+
+    def _calc_hash(self, cmd_hash, deps) -> bytes:
+        tree_hash = cmd_hash
+        for dep in deps:
+            with Timer(f"WARNING: hash for {dep} took longer then usueal", threshold=0.05, color=bcolors.FAIL):
+                try:
+                    fentry: FileEntry = self.graph.get_data(dep)
+                except KeyError:
+                    fentry = self._get_file_entry(dep)
+                    fentry.set_modified(False)
+                    self.graph.add_node(dep, fentry)
+                    # out.print_file_add(dep)
+                tree_hash = byte_xor(tree_hash, fentry.md5sum)
+        return tree_hash
+
+    def _set_deps_hash(self, node_entry, execucter: CmdExecuter):
+        metadata_hash = execucter.metadata_hash
+        self.cache_mgr.save_cache(metadata_hash, MetadataCache(execucter.dep_files))
+
+    def _get_deps_hash(self, node_entry):
+        metadata_hash: bytes = self._calc_hash(node_entry.md5sum, node_entry.data.conf_deps)
+        if not node_entry.data.target:
+            return None, None, metadata_hash
+        try:
+            metadata = self.cache_mgr.open_cache(metadata_hash)
+            deps_hash = self._calc_hash(node_entry.md5sum, metadata.deps)
+            return deps_hash, metadata.deps, metadata_hash
+        except FileNotFoundError:
+            return None, None, metadata_hash
+
+    def execute_graph(self):
+        add_conns = []
+        del_conns = []
+        if global_config.targets:
+            top_sort = self.graph.subgraph_topological_sort(global_config.targets)
+        else:
+            top_sort = list(self.graph.topological_sort())
+        for node in top_sort:
+            node_entry: FileEntry = self.graph.get_data(node)
+            if not node_entry.is_modified:
+                continue
+            while node_entry.dependencies_built > 0:
+                self._handle_done(add_conns, del_conns)
+            
+            successors = set()
+            for succ in self.graph.successors(node):
+                succ_node = self.graph.get_data(succ)
+                succ_node.set_modified(True)
+                if node_entry.entry_type == FileEntry.EntryType.CMD:
+                    succ_node.increase_dependencies_built(1)
+                successors.add(succ)
+            if node_entry.entry_type == FileEntry.EntryType.CMD:
+                deps_hash, cached_deps, metadata_hash = self._get_deps_hash(node_entry)
+                execucter = CmdExecuter(successors, "", node_entry.data)
+                
+                execucter.cmd_hash = node_entry.md5sum
+                execucter.metadata_hash = metadata_hash
+                execucter.deps_hash = deps_hash
+                execucter.dep_files = cached_deps
+                self.jobs_queue.put(execucter)
+                self.n_jobs += 1
+            else:
+                node_entry.set_modified(False)
+        
+        if self.n_jobs:
+            while self._handle_done(add_conns, del_conns):
+                pass
+        
+        self.graph.add_connections(add_conns)
+        self.graph.remove_connections(del_conns)
+
+    def dump_graph(self):
+        with Timer("done saving graph"):
+            self.graph.dump_graph()
+
+    def load_graph(self):
+        with Timer("done loading graph"):
+            self.graph = GraphDB.load_graph()
+            self.graph.init()
+
+    def cache_gc(self):
+        self.cache_mgr.gc()
+    
+    def run(self):
+        fd, lock_path = fs_lock(UMAKE_ROOT_DIR)
+        if fd == None:
+            out.print_fail(f"another umake is running!, if you sure it's not running remove {UMAKE_ROOT_DIR}.lock")
+            os.sys.exit(-1)
+            return
+        try:
+            self._init_build()
+            self.load_graph()
+            self.scan_fs()
+            self.parse_cmd_files()
+            # profiler.start()
+            self.execute_graph()
+            # profiler.stop()
+            self.dump_graph()
+            self.cache_gc()
+            out.update_bar(force=True)
+            out.destroy()
+        finally:
+            fs_unlock(fd, lock_path)
+
+    def show_target_details(self, target):
+        target_fentry: FileEntry
+        target_fentry = self.graph.get_data(target)
+        
+        cmd = target_fentry.data.cmd
+        all_deps = set(self.graph.predecessors(cmd))
+        
+        configured_deps = sorted(target_fentry.data.dep - target_fentry.data.manual_deps)
+        manual_deps = sorted(target_fentry.data.manual_deps)
+        auto_deps = all_deps - target_fentry.data.dep
+        auto_dep_in_project = set()
+        for auto_dep in auto_deps:
+            if fnmatch.fnmatch(auto_dep, ROOT + "/*"):
+                auto_dep_in_project.add(auto_dep)
+        global_auto_deps = sorted(auto_deps - auto_dep_in_project)
+        auto_dep_in_project = sorted(auto_dep_in_project)
+        successors = set(self.graph.successors(target))
+        
+        if global_config.json_file:
+            with open(global_config.json_file, "w") as f:
+                import json
+                out_json = dict()
+                deps = dict()
+                deps["configured"] = configured_deps
+                deps["manual"] = manual_deps
+                deps["auto_in"] = auto_dep_in_project
+                deps["auto_global"] = global_auto_deps
+                out_json["target"] = target
+                out_json["deps"] = deps
+                out_json["cmd"] = target_fentry.data.cmd
+
+                f.write(json.dumps(out_json))
+        else:
+            out.print_colored(f"{target}: [{target_fentry.md5sum.hex()}]", bcolors.HEADER)
+            print("\tdeps:")
+            for idx, dep in enumerate(configured_deps):
+                print(f"\t\t{idx:4} {dep:70} [{self.graph.get_data(dep).md5sum.hex()}]")
+            for idx, dep in enumerate(manual_deps):
+                out.print_colored(f"\t\t{idx:4} {dep:70} [{self.graph.get_data(dep).md5sum.hex()}]", bcolors.WARNING)
+            for idx, dep in enumerate(auto_dep_in_project):
+                out.print_colored(f"\t\t{idx:4} {dep:70} [{self.graph.get_data(dep).md5sum.hex()}]", bcolors.OKGREEN)
+            for idx, dep in enumerate(global_auto_deps):
+                out.print_colored(f"\t\t{idx:4} {dep:70} [{self.graph.get_data(dep).md5sum.hex()}]", bcolors.OKBLUE)
+            print()
+            print("\tsuccessors targets:")
+            for succ in successors:
+                succ_targets = " ".join(sorted(set(self.graph.successors(succ))))
+                print(f"\t\t{succ_targets}")
+            print()
+            print("\tcmd:")
+            print(f'\t\t{target_fentry.data.cmd}')
+            print()
+            print(f"\tUMakdile:{target_fentry.data.line.line_num}\n\t\t{target_fentry.data.line.line}")
+
+    def show_all_targets(self):
+        generated = self.graph.get_nodes(FileEntry.EntryType.GENERATED)
+        for idx, target in enumerate(sorted(generated)):
+            print(f'{idx:4} {target.replace(ROOT + "/", "")}')
+    
+    def clean(self):
+        generated = self.graph.get_nodes(FileEntry.EntryType.GENERATED)
+        with Timer("done cleaning targets"):
+            for idx, target in enumerate(sorted(generated)):
+                out.print_file_deleted(target, "DELETING")
+                try:
+                    os.remove(target)
+                except FileNotFoundError:
+                    pass
+        with Timer("done cleaning local cache"):
+            fd, lock_path = fs_lock(UMAKE_BUILD_CACHE_DIR)
+            try:
+                for root, dirs, files in os.walk(UMAKE_BUILD_CACHE_DIR):
+                    for f in files:
+                        os.unlink(os.path.join(root, f))
+                    for d in dirs:
+                        shutil.rmtree(os.path.join(root, d))
+            finally:
+                fs_unlock(fd, lock_path)
+        with Timer("done deleting build db"):
+            try:
+                shutil.rmtree(UMAKE_ROOT_DIR, ignore_errors=True)
+            except FileNotFoundError:
+                pass
+
+    def show_targets_details(self, target):
+        generated = self.graph.get_nodes(FileEntry.EntryType.GENERATED)
+        for graph_target in sorted(generated):
+            if fnmatch.fnmatch(graph_target, target):
+                self.show_target_details(graph_target)
+
+    def show_target_details_run(self, targets):
+        umake.load_graph()
+        umake.parse_cmd_files()
+        for target in targets:
+            self.show_targets_details(target)
+    
+    def show_parsed_umakefile(self):
+        self.load_graph()
+        UMakefile = join(ROOT , "UMakefile")
+        umakefile = UMakeFileParser(UMakefile)
+
+        cmd_template: CmdTemplate
+        all_targets = set()
+        for cmd_template in umakefile.cmds_template:
+            cmd_template.create_cmds(self.graph, all_targets)
+            print(cmd_template.cmd_fmt)
+            for cmd in cmd_template.cmds:
+                print(f"\t{cmd.cmd}")
+
+umake = UMake()
+if len(sys.argv) == 1:
+    umake.run()
+else:
+    import argparse
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument('targets', type=str, nargs="*",
+                        help='target path')
+
+    parser.add_argument('-d', '--details', action='store_true',
+                        help='details about the target')
+    
+    parser.add_argument('--json', action='store', dest='json_file',
+                        help='output as json')
+    
+    parser.add_argument('--show-all-targets', action='store_true', dest="show_all_targets",
+                        help="show all targets configured in UMakefile")
+
+    parser.add_argument('--show-parsed-umakefile', action='store_true', dest="show_parsed_umakefile",
+                        help="show parsed umakefile")
+    
+    parser.add_argument('--no-remote-cache', action='store_true', dest="no_remote_cache",
+                        help="don't use remote cache")
+
+    parser.add_argument('--no-local-cache', action='store_true', dest="no_local_cache",
+                        help="don't use local cache")
+    
+    parser.add_argument('--remote-cache-stats', action='store_true', dest="remote_cache_stats",
+                        help="show stats of remote cache")
+
+    parser.add_argument('--remote-cache-delete', action='store_true', dest="remote_cache_delete",
+                        help="WARNING: delete all remote cache objects")
+    
+    parser.add_argument('-v', '--variant', action='store', dest="variant",
+                        help="compile with diffrent variants")
+    
+    parser.add_argument('--clean', action='store_true', dest="clean",
+                        help="clean umake file, with all targets")
+
+    args = parser.parse_args()
+
+    if args.json_file:
+        global_config.json_file = args.json_file
+    
+    if args.no_remote_cache:
+        global_config.remote_cache = False
+    
+    if args.no_local_cache:
+        global_config.local_cache = False
+    
+    if args.remote_cache_stats:
+        mc = MinioCache()
+        mc.get_cache_stats()
+        os.sys.exit(0)
+    
+    if args.remote_cache_delete:
+        mc = MinioCache()
+        mc.clear_bucket()
+        os.sys.exit(0)
+    
+    if args.show_all_targets:
+        umake.load_graph()
+        umake.show_all_targets()
+
+    if args.variant:
+        global_config.variant = args.variant
+        out.variant = global_config.variant
+
+    if args.show_parsed_umakefile:
+        umake.show_parsed_umakefile()
+        os.sys.exit(0)
+    
+    if args.clean:
+        umake.load_graph()
+        umake.clean()
+        os.sys.exit(0)
+
+    if args.details:
+        args.targets = [join(ROOT, t) + "**" for t in args.targets]
+        umake.show_target_details_run(args.targets)
+    else:
+        args.targets = [join(ROOT, t) for t in args.targets]
+        global_config.targets = args.targets
+        umake.run()
+    
+#set(self.graph.graph.vs.select(_degree=80))
+
+# print(profiler.output_text(color=True))

@@ -8,11 +8,11 @@ from datetime import datetime
 ROOT = os.getcwd()
 UMAKE_ROOT_DIR = join(ROOT, ".umake")
 UMKAE_TMP_DIR = join(UMAKE_ROOT_DIR, "tmp")
-UMAKE_DB = join(UMAKE_ROOT_DIR, "db.pickle")
 UMAKE_BUILD_CACHE_DIR = join(UMAKE_ROOT_DIR, "build-cache")
 UMAKE_BUILD_CACHE_MAX_SIZE_MB = 1500
 MINIMAL_ENV = {"PATH": "/usr/bin"}
-UMAKE_MAX_WORKERS = 4
+UMAKE_MAX_WORKERS = 8
+UMAKE_DB = join(UMAKE_ROOT_DIR, "db.pickle")
 
 
 file_action_fmt = "   [{action}] {filename}"
@@ -57,12 +57,14 @@ class InteractiveOutput:
     def __init__(self):
         self.bar_lock = threading.Lock()
         self.n_active_workers = AtomicInt()
-        self.n_cache_hits = 0
+        self.n_local_hits = 0
+        self.n_remote_hits = 0
         self.n_works_done = 0
         self.cache_current = "N/A"
         self.start_time = datetime.now()
         self.curr_job = ""
 
+        self.variant = "deafult"
         self.n_calls = 0
 
     def _get_curr_cache_size(self):
@@ -82,13 +84,21 @@ class InteractiveOutput:
             diff = int((datetime.now() - self.start_time).total_seconds())
             
             sys.stdout.write("\x1b[2K\r")
-            print(f"\r{bright_blue} Workers   {bcolors.ENDC}{bold} {self.n_active_workers}/{UMAKE_MAX_WORKERS}     {bcolors.ENDC}", end="")
-            print(f"{bright_blue} Cache   {bcolors.ENDC}{bold} {int(self.cache_current)}/{UMAKE_BUILD_CACHE_MAX_SIZE_MB}[MB]   {bcolors.ENDC}", end="")
+            print(f"\r{bright_blue} Workers  {bcolors.ENDC}{bold}{self.n_active_workers}/{UMAKE_MAX_WORKERS}{bcolors.ENDC}", end="")
+            print(f"{bright_blue} Cache  {bcolors.ENDC}{bold}{int(self.cache_current)}/{UMAKE_BUILD_CACHE_MAX_SIZE_MB}[MB] {bcolors.ENDC}", end="")
             if self.n_works_done:
-                cache_ratio = int(self.n_cache_hits / self.n_works_done * 100)
-                print(f"{bright_blue} Cache Hits   {bcolors.ENDC}{bold} {cache_ratio}%   {bcolors.ENDC}", end="")
-            print(f"{bright_blue} Time   {bcolors.ENDC}{bold} {diff}[sec]   {bcolors.ENDC}", end="")
-            print(f"{bold} {self.curr_job}   {bcolors.ENDC}", end="")
+                n_cache_hits = self.n_local_hits + self.n_remote_hits
+                cache_ratio = int(n_cache_hits / self.n_works_done * 100)
+                local_ratio = 0
+                remote_ratio = 0
+                if n_cache_hits:
+                    local_ratio = int(self.n_local_hits / n_cache_hits * 100)
+                    remote_ratio = int(self.n_remote_hits / n_cache_hits * 100)
+                print(f"{bright_blue} Cache Hits  {bcolors.ENDC}{bold}{cache_ratio}% {bcolors.ENDC}", end="")
+                print(f"{bright_blue} Local/Remote  {bcolors.ENDC}{bold}{local_ratio}%/{remote_ratio}%  {bcolors.ENDC}", end="")
+            print(f"{bright_blue} Variant {bcolors.ENDC}{bold} {self.variant} {bcolors.ENDC}", end="")
+            print(f"{bright_blue} Time  {bcolors.ENDC}{bold} {diff}[sec] {bcolors.ENDC}", end="")
+            print(f"{bold} {self.curr_job} {bcolors.ENDC}", end="")
             sys.stdout.flush()
             
             self.n_calls += 1
