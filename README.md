@@ -7,7 +7,28 @@ Overview
 UMake is a build system that building your projects.  
 influenced by [`tup`](http://gittup.org/tup/). 
 
+Install
+-------
+```
+https://github.com/grisha85/umake.git
+pip3 install umake
+```
+- strace and bash are `umake` dependencies
 
+Minimal UMakefile
+-----------------
+```
+# macros
+!c(includes, flags) : gcc -g -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o
+!app-c(includes, flags, libs) : gcc -g {filename} $includes $flags $libs -o {target}
+
+# compile c
+$includes = -Iinclude
+$cflags = -O0
+:foreach src/*.c > !c(includes, $cflags)
+: *.o > !app-c( , , ) > myapp
+```
+add this `UMakfile` to your `root` directory of your project. and run `umake --no-remote-cache`
 
 How UMake works
 ---------------
@@ -143,7 +164,7 @@ $cflags = -O0
 
 : my.c > !c($cflags) > my.o
 ```
-now compile with `umake` for default variant and 
+now compile with `umake` for default variant 
 ```
 umake
 ```
