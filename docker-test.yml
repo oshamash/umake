@@ -1,0 +1,8 @@
+sut:
+  build: .
+  command: bash -c "protoc-c --version && gcc --version && cd test && python3.6 test.py"
+  volumes:
+     - ./test/test.py:/umake/test/test.py
+     - ./umake.py:/usr/bin/umake.py
+     - ./colored_output.py:/usr/bin/colored_output.py
+     - ./pywildcard.py:/usr/bin/pywildcard.py
