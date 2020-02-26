@@ -7,6 +7,11 @@ Overview
 UMake is a build system that building your projects.  
 influenced by [`tup`](http://gittup.org/tup/). 
 
+* local cache - disk cache
+* remote cache - minio
+* auto dependency discovery using strace
+* simple configuration language
+
 Install
 -------
 ```
