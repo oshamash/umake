@@ -12,28 +12,15 @@ influenced by [`tup`](http://gittup.org/tup/).
 * auto dependency discovery using strace
 * simple configuration language
 
-Install
--------
+Running example
+---------------
 ```
-https://github.com/grisha85/umake.git
-pip3 install umake
+docker build -t umake  .
+docker run --rm -it -v`pwd`/example:/example -w/example umake bash
+umake --no-remote-cache
+./hello_world
 ```
-- strace and bash are `umake` dependencies
 
-Minimal UMakefile
------------------
-```
-# macros
-!c(includes, flags) : gcc -g -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o
-!app-c(includes, flags, libs) : gcc -g {filename} $includes $flags $libs -o {target}
-
-# compile c
-$includes = -Iinclude
-$cflags = -O0
-:foreach src/*.c > !c(includes, $cflags)
-: *.o > !app-c( , , ) > myapp
-```
-add this `UMakfile` to your `root` directory of your project. and run `umake --no-remote-cache`
 
 How UMake works
 ---------------

@@ -13,9 +13,8 @@ with open('requirements.txt') as f:
 setup(
     name='umake',
     version='0',
-    package_dir={'':'.'},
-    # packages=find_packages(where="./cli/"),
+    packages=['umake'],
     install_requires=required,
     license='MIT',
-    scripts=['./umake']
+    scripts=['./umake/umake']
 )

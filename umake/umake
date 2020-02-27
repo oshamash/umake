@@ -1,6 +1,6 @@
 #!/usr/bin/python3.6
 import time
-from colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
+from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
 
 # from pyinstrument import Profiler
 # profiler = Profiler()
@@ -71,7 +71,7 @@ with Timer("done imports"):
     from itertools import chain
     import shutil
     import sys
-    import pywildcard as fnmatch
+    import umake.pywildcard as fnmatch
     from minio import Minio, error  # takes 0.1 seconds, check what to do
     from minio.helpers import (MAX_PART_SIZE,
                       MAX_POOL_SIZE,

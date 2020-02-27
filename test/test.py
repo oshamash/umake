@@ -1,7 +1,3 @@
-<<<<<<< HEAD
-=======
-#!/usr/bin/python3.6
->>>>>>> e71749a... sdf
 import unittest
 from subprocess import check_output
 import subprocess
@@ -12,11 +8,7 @@ import json
 
 ROOT = os.getcwd()
 
-<<<<<<< HEAD
-class TestUmake(unittest.TestCase):
-=======
 class TestUMake(unittest.TestCase):
->>>>>>> e71749a... sdf
 
     def setUp(self):
         shutil.rmtree("env", ignore_errors=True)
@@ -64,14 +56,6 @@ class TestUMake(unittest.TestCase):
         timestamps = dict()
         for p in path:
             full_path = os.path.join("env", p)
-<<<<<<< HEAD
-            self.assertTrue(os.path.isfile(full_path))
-            timestamps[p] = os.stat(full_path).st_mtime
-            if is_changed[p] == True:
-                self.assertNotEqual(check_timestamp[p], timestamps[p])
-            else:
-                self.assertEqual(check_timestamp[p], timestamps[p], msg=f"p={p}")
-=======
             self.assertTrue(os.path.isfile(full_path), msg=f"path {full_path} is {os.path.isfile(full_path)}")
             
             if len(is_changed):
@@ -80,20 +64,12 @@ class TestUMake(unittest.TestCase):
                     self.assertNotEqual(check_timestamp[p], timestamps[p])
                 else:
                     self.assertEqual(check_timestamp[p], timestamps[p], msg=f"p={p}")
->>>>>>> e71749a... sdf
         return timestamps
     
     def _check_file_not_exists(self, path):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
 
-<<<<<<< HEAD
-    def _compile(self, umake, should_fail=False):
-        with open('env/UMakefile', "w") as umakefile:
-            umakefile.write(umake)
-        try:
-            check_output("umake.py", cwd="env/")
-=======
     def _compile(self, umake, variant="", targets=[],should_fail=False):
         with open('env/UMakefile', "w") as umakefile:
             umakefile.write(umake)
@@ -106,18 +82,13 @@ class TestUMake(unittest.TestCase):
             print(check_output(f"umake --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8"))
             if should_fail:
                 self.assertTrue(False, msg="umake compiled although should fail")
->>>>>>> e71749a... sdf
         except subprocess.CalledProcessError as e:
             if should_fail is False:
                 print(e)
                 self.assertTrue(False, msg="Failed to run umake")
 
     def _assert_compilation(self, target, deps_conf=None, deps_manual=None, deps_auto_in=None):
-<<<<<<< HEAD
-        check_output(f"umake.py {target} --details --json json_out", shell=True, cwd="env/")
-=======
         check_output(f"umake {target} --no-local-cache --no-remote-cache --details --json json_out", shell=True, cwd="env/")
->>>>>>> e71749a... sdf
         with open("env/json_out") as f:
             deps = json.load(f)
         
@@ -133,10 +104,6 @@ class TestUMake(unittest.TestCase):
             os.remove(os.path.join("env", f))
 
     def _create(self, path, content):
-<<<<<<< HEAD
-        with open(f'env/{path}', "w") as f:
-            f.write(content)
-=======
         parent = os.path.dirname(path)
         if parent not in ["", "/"]:
             check_output(f"mkdir -p env/{parent}", shell=True)
@@ -144,16 +111,11 @@ class TestUMake(unittest.TestCase):
             f.write(content)
         if path.endswith(".sh"):
             check_output(f"chmod +x env/{path}", shell=True)
->>>>>>> e71749a... sdf
 
     def test_simple_umake(self):
         self._create_setup_simple_umake()
         umake = ":foreach *.c > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
         umake += ": *.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
-<<<<<<< HEAD
-        
-=======
->>>>>>> e71749a... sdf
         self._compile(umake)
         timestamps = {"a.o": 0, "b.o": 0, "test.so": 0}
         is_changed = {"a.o": True, "b.o": True, "test.so": True}
@@ -208,13 +170,8 @@ class TestUMake(unittest.TestCase):
         self._assert_compilation("test.so", deps_conf=["a.o", "b.o"], deps_manual=[], deps_auto_in=[])
 
         """ remove source compilation from UMakefile, all targets should be removed """
-<<<<<<< HEAD
-        umake = ": *.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
-        self._compile(umake, should_fail=True)
-=======
         umake = "\n"
         self._compile(umake)
->>>>>>> e71749a... sdf
         self._check_file_not_exists(["a.o", "b.o", "test.so"])
 
         """ compile only sources """
@@ -293,19 +250,13 @@ int hellob_gen()
         
         umake  = ":foreach proto/*.proto > protoc-c -I={dir} --c_out={dir} {filename} > {dir}/{noext}.pb-c.c {dir}/{noext}.pb-c.h\n"
         umake += ":foreach b_notuse.c > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
-<<<<<<< HEAD
-        umake += ": *.o proto/*.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
-=======
         umake += ": *.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
->>>>>>> e71749a... sdf
         self._rm(["proto/a_proto.proto", "a_use.c"])
         self._compile(umake)
         self._check_file_not_exists(["proto/a_proto.pb-c.c", "proto/a_proto.pb-c.h", "proto/a_proto.pb-c.o"])
         is_changed = {"b_notuse.o": False, "test.so": True}
         timestamps = self._check_file_exists(["b_notuse.o", "test.so"], check_timestamp=timestamps, is_changed=is_changed)
 
-<<<<<<< HEAD
-=======
     def test_recursive_deps(self):
         """ foreach """
         """ for a > b > c > d check if a delete -> all deleted """
@@ -552,7 +503,6 @@ int hellob_gen()
         self._compile(umake)
         self._check_file_exists(["other_dir/b"])
 
->>>>>>> e71749a... sdf
 
 if __name__ == '__main__':
     unittest.main()
