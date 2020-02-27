@@ -50,16 +50,16 @@ UMakefile
 ---------
 ## Rule `:`
 
-A signle `command` is generated for this rule
+A single `command` is generated for this rule
 
-`:` source | manual-deps `>` cmd `>` target
+`:` source `|` manual-deps `>` cmd `>` target
 
-`manual-deps` - targets the this tule depends on, in order to keep a correct build order  
+`manual-deps` - targets the this target depends on, helps keep a correct build order  
 `cmd` - bash command  
 `target` - the output of the command  
   
 `{filename}` - full path filename of the source `/my/path/filename.a`  
-`{dir}` - directory of the source `/my/path/`  
+`{dir}` - directory containing the source `/my/path/`  
 `{noext}` - filename without extension `filename`  
 `{target}` - expanded target `helloworld.a`  
 
@@ -69,7 +69,7 @@ Example:
 ```
 
 #### Recursive Source `**`
-recursice deps are support
+recursice dependancies are support
 ```
 root\
   a\
@@ -87,26 +87,26 @@ root\
 * `root/a/**/*.b` -> (`a.a.b`, `a.b.b`)
 
 #### Manual Dependency `|`
-In order to maintain the correct order of the build (that is done in parallel), there are use cases that manual depndecy is needed to be provided. for example: if there are `generated headers` that used later by other `command` to generate anoter target. 
+In order to maintain a correct build order (that is executed in parallel), there are use cases where manual depndecy is needed. for example: if there are `generated headers` (like when using `protobuf`) that are being later used by another `command` to generate a different target. 
 
 
 ## Rule `:foreach`
-Same as `:` but will create `command` for each `source` (that match the pettern *.o in the example above) file that will be found on the filesystem
+Same as `:` but will create `command` for each `source` file existing on filesystem (like when we match the pettern *.o in the example above)
 
 ## Macro `!`
-Macros are expanded immediatlly (like `#define X "hello"` in c/cpp)  
-Macros can accept parameters
+Macros are expanded immediately (like using `#define X "hello"` in c/cpp)  
+Macros can accept input parameters (again, similar to using c/cpp macros)
 
 Example:
 ```
 !c(includes, flags) : gcc -g -O2 -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o  
 ```
 #### Default values
-`Macro` supports defualt values, by default it `""`:
+`Macro` supports default values, by default they are `""`:
 ```
 !c(includes, flags=-O3) : gcc -g -O2 -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o  
 ```
-now `!c` can be called as following
+now `!c` can be called as following:
 ```
 !c(-Iinclude)       # includes = -Iinclude, flags=-O3
 !c(-Iinclude, -O0)  # includes = -Iinclude, flags=-O0
@@ -126,8 +126,13 @@ Configs allow to configure and changing umake execution.
 #### `workdir`
 Default: \<root>
 
-Changing current working directory. After changing the working directory all `relative paths` are relative to the new working dir. `Absoulte paths` are relative to the `root` (the directory where UMakefile exists).
-Relative path `my_dir_a/my_dir_b` will be evaluated as `<workdir>/my_dir_a/my_dir_b`. However `/my_dir_a/my_dir_b` will be evaluated as `<root>/my_dir_a/my_dir_b` regardless what working dir is.
+Change the current working directory.
+`relative paths` will now be relative to the new working dir.
+`Absoulte paths` will now be relative to the `root` (the directory where UMakefile exists).
+
+Example:
+Relative path `my_dir_a/my_dir_b` will be evaluated as `<workdir>/my_dir_a/my_dir_b`.
+However `/my_dir_a/my_dir_b` will be evaluated as `<root>/my_dir_a/my_dir_b` *regardless* of what our `workdir` is.
 
 The following rules are similar:
 
