@@ -14,13 +14,15 @@ influenced by [`tup`](http://gittup.org/tup/).
 
 Running example
 ---------------
+
 ```
+git clone https://github.com/grisha85/umake.git
+cd umake
 docker build -t umake  .
 docker run --rm -it -v`pwd`/example:/example -w/example umake bash
 umake --no-remote-cache
 ./hello_world
 ```
-
 
 How UMake works
 ---------------
