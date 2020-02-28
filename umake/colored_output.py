@@ -4,14 +4,12 @@ import os
 from os.path import join
 from subprocess import check_output, CalledProcessError
 from datetime import datetime
+from umake.config import UMAKE_BUILD_CACHE_MAX_SIZE_MB, ROOT, UMAKE_MAX_WORKERS
 
-ROOT = os.getcwd()
 UMAKE_ROOT_DIR = join(ROOT, ".umake")
 UMKAE_TMP_DIR = join(UMAKE_ROOT_DIR, "tmp")
 UMAKE_BUILD_CACHE_DIR = join(UMAKE_ROOT_DIR, "build-cache")
-UMAKE_BUILD_CACHE_MAX_SIZE_MB = 1500
 MINIMAL_ENV = {"PATH": "/usr/bin"}
-UMAKE_MAX_WORKERS = 8
 UMAKE_DB = join(UMAKE_ROOT_DIR, "db.pickle")
 
 
@@ -40,20 +38,20 @@ class AtomicInt:
     def __init__(self):
         self.num = 0
         self.lock = threading.Lock()
-    
+
     def inc(self):
         with self.lock:
             self.num += 1
-    
+
     def dec(self):
         with self.lock:
             self.num -= 1
-    
+
     def __repr__(self):
         return str(self.num)
 
 class InteractiveOutput:
-    
+
     def __init__(self):
         self.bar_lock = threading.Lock()
         self.n_active_workers = AtomicInt()
@@ -64,7 +62,7 @@ class InteractiveOutput:
         self.start_time = datetime.now()
         self.curr_job = ""
 
-        self.variant = "deafult"
+        self.variant = "default"
         self.n_calls = 0
 
     def _get_curr_cache_size(self):
@@ -82,7 +80,7 @@ class InteractiveOutput:
             bright_blue = "\033[1;34;40m"
             bold = "\033[1;37;40m"
             diff = int((datetime.now() - self.start_time).total_seconds())
-            
+
             sys.stdout.write("\x1b[2K\r")
             print(f"\r{bright_blue} Workers  {bcolors.ENDC}{bold}{self.n_active_workers}/{UMAKE_MAX_WORKERS}{bcolors.ENDC}", end="")
             print(f"{bright_blue} Cache  {bcolors.ENDC}{bold}{int(self.cache_current)}/{UMAKE_BUILD_CACHE_MAX_SIZE_MB}[MB] {bcolors.ENDC}", end="")
@@ -100,9 +98,9 @@ class InteractiveOutput:
             print(f"{bright_blue} Time  {bcolors.ENDC}{bold} {diff}[sec] {bcolors.ENDC}", end="")
             print(f"{bold} {self.curr_job} {bcolors.ENDC}", end="")
             sys.stdout.flush()
-            
+
             self.n_calls += 1
-    
+
     def print_colored(self, out_str, color=""):
         if is_ineractive_terminal:
             sys.stdout.write("\x1b[2K\r")

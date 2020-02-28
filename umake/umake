@@ -1,13 +1,14 @@
 #!/usr/bin/python3.6
 import time
 from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
+from umake import config
 
 # from pyinstrument import Profiler
 # profiler = Profiler()
 
 out = InteractiveOutput()
 
-class Timer:    
+class Timer:
     def __init__(self, msg, threshold=0, color=bcolors.OKGREEN):
         self.msg = msg
         self.postfix = ""
@@ -98,8 +99,8 @@ global_config = Config()
 
 
 class MinioCache:
-    
-    BUCKET = "umake-build-cache"
+
+    BUCKET = config.MINIO_BUCKET_NAME
     def __init__(self):
         self.n_timeouts = 0
         ca_certs = certifi.where()
@@ -115,12 +116,12 @@ class MinioCache:
                         )
             )
 
-        self.mc = Minio("my-server",
-                       access_key='user', 
-                       secret_key='pass', 
-                       secure=False, 
-                       http_client=http)
-    
+        self.mc = Minio(config.MINIO_URL,
+                        access_key=config.MINIO_ACCESS_KEY,
+                        secret_key=config.MINIO_SECRET_KEY,
+                        secure=False,
+                        http_client=http)
+
     def _increase_timeout_and_check(self):
         self.n_timeouts += 1
         if self.n_timeouts >= 3:
@@ -142,7 +143,7 @@ class MinioCache:
             raise FileNotFoundError
         except error.NoSuchKey:
             raise FileNotFoundError
-    
+
     def save_cache(self, cache_hash, metadata_cache: MetadataCache):
         cache_src = "md-" + cache_hash.hex()
         md = pickle.dumps(metadata_cache, protocol=pickle.HIGHEST_PROTOCOL)
@@ -190,7 +191,7 @@ class MinioCache:
             out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
             global_config.remote_cache = False
             return False
-            
+
         return True
 
     def _save_cache(self, deps_hash, targets):
@@ -213,11 +214,11 @@ class MinioCache:
         finally:
             # fs_unlock(fd, lock_path)
             pass
-    
+
     def get_cache_stats(self):
         bucket_size = 0
         n_objects = 0
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True): 
+        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
             if obj.is_dir:
                 continue
             bucket_size += obj.size
@@ -225,16 +226,16 @@ class MinioCache:
         print(f"bucket size {int(bucket_size / 1024 / 1024)}MB, n_objects {n_objects}")
 
     def clear_bucket(self):
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True): 
+        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
             self.mc.remove_object(bucket_name=self.BUCKET, object_name=obj.object_name)
         self.get_cache_stats()
 
 
 class FsCache:
-    
+
     def __init__(self):
         pass
-        
+
     def open_cache(self, cache_hash) -> MetadataCache:
         cache_src = join(UMAKE_BUILD_CACHE_DIR, "md-" + cache_hash.hex())
         with open(cache_src, "rb") as metadata_file:
@@ -260,7 +261,7 @@ class FsCache:
         except FileNotFoundError:
             shutil.rmtree(cache_src, ignore_errors=True)
             return False
-            
+
         return True
 
     def _save_cache(self, deps_hash, targets):
@@ -295,10 +296,10 @@ class FsCache:
             cache_dir_size_KB = get_size_KB(UMAKE_BUILD_CACHE_DIR)
             high_thresh = cache_dir_size_KB * 1.1
             low_tresh = UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 * 0.6
-            
+
             if UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 > high_thresh:
                 return
-            
+
             fd, lock_path = fs_lock(UMAKE_BUILD_CACHE_DIR)
             if fd == None:
                 out.print_fail(f"\tcahce: {UMAKE_BUILD_CACHE_LOCK} is locked")
@@ -326,7 +327,7 @@ class CacheMgr:
         NOT_CACHED = 0
         LOCAL = 1
         REMOTE = 2
-    
+
     fs_cache: FsCache = FsCache()
     def __init__(self):
         if global_config.remote_cache:
@@ -369,14 +370,14 @@ class CacheMgr:
             return
         if global_config.remote_cache:
             self.minio_cache._save_cache(deps_hash, targets)
-    
+
     def gc(self):
         self.fs_cache.gc()
 
 
 
-def byte_xor(ba1, ba2): 
-    return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)]) 
+def byte_xor(ba1, ba2):
+    return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)])
 
 
 
@@ -407,7 +408,7 @@ class CmdExecuter:
         self.dep_files = None
         self.is_ok = False
         self.is_from_cache: CacheMgr.CacheType = CacheMgr.CacheType.NOT_CACHED
-        
+
         # cache state
         """ in """
         self.deps_hash = None
@@ -415,7 +416,7 @@ class CmdExecuter:
         self.cmd_hash = None
         """ out """
         self.dep_files_hashes = dict()
-    
+
     def _check_in_root(self, check_str: str):
         if check_str[0] == "/":
             if check_str.startswith("/tmp/") or check_str.startswith("/dev/") or check_str.startswith("/proc/") or \
@@ -457,7 +458,7 @@ class CmdExecuter:
         tmp_unique_name_full_path = join(UMKAE_TMP_DIR, str(uuid.uuid1()))
         with Timer(self.cmd.compile_show(), color=bcolors.WARNING) as timer:
             if self.target:
-                cache_type = cache_mgr._get_cache(self.deps_hash, self.target) 
+                cache_type = cache_mgr._get_cache(self.deps_hash, self.target)
                 if cache_type > CacheMgr.CacheType.NOT_CACHED:
                     if cache_type == CacheMgr.CacheType.LOCAL:
                         timer.set_prefix("[LOCAL-CACHE]")
@@ -469,7 +470,7 @@ class CmdExecuter:
                     return
             strace_cmd = f"strace -o{tmp_unique_name_full_path} -f -e open,openat /bin/bash -c '{self.cmd.cmd}'"
             self.proc = Popen(strace_cmd, env=MINIMAL_ENV, shell=True, stdout=PIPE, stderr=PIPE, cwd=self.cmd.cmd_root)
-            
+
             while True:
                 try:
                     stdout, stderr = self.proc.communicate(timeout=3)
@@ -478,7 +479,7 @@ class CmdExecuter:
                     out.curr_job = self.cmd.summarized_show()
                     out.update_bar()
             rc = self.proc.poll()
-            
+
             stdout = stdout.decode("utf-8")
             stderr = stderr.decode("utf-8")
 
@@ -492,7 +493,7 @@ class CmdExecuter:
                 if stderr:
                     out.print(stderr)
                 self.is_ok = True
-            
+
 
             self.dep_files = set()
             with open(tmp_unique_name_full_path) as strace_output:
@@ -522,13 +523,13 @@ class CmdExecuter:
                 if rc == 0 and not self.target.issubset(self.dep_files):
                     raise RuntimeError(f"Target not generated: Expected {self.target} Got: {self.dep_files}")
                 self.dep_files -= self.target
-            
+
                 deps_hash = self.cmd_hash
                 for dep in self.dep_files:
                     deps_hash = byte_xor(deps_hash, self.dep_files_hashes[dep])
                 cache_mgr._save_cache(deps_hash, self.target)
                 timer.set_prefix("[CACHED]")
-        
+
     def get_results(self):
         return self.dep_files, self.target
 
@@ -567,7 +568,7 @@ class FileEntry:
 
     def set_modified(self, new_value: bool):
         self.is_modified = new_value
-    
+
     def increase_dependencies_built(self, inc: int):
         self.dependencies_built += inc
 
@@ -577,7 +578,7 @@ class FileEntry:
     @staticmethod
     def file_md5sum(full_path):
         with open(full_path, "rb") as file_to_check:
-            data = file_to_check.read()    
+            data = file_to_check.read()
             md5_returned = hashlib.sha1(data).digest()
             return md5_returned
 
@@ -596,14 +597,14 @@ class FileEntry:
             self.md5sum  = new_md5sum
         self.mtime = new_mtime
         return modified
-    
+
     def delete_fs(self):
         out.print_file_deleted(self.full_path, "DELETING")
         try:
             os.remove(self.full_path)
         except FileNotFoundError:
             pass
-    
+
     def update_with_md5sum(self, new_md5sum):
         stat = os.stat(self.full_path)
         self.mtime = int(stat.st_mtime * 100000)
@@ -611,7 +612,7 @@ class FileEntry:
 
     def __str__(self):
         return f"{self.full_path}: {self.data.conf_deps}"
-    
+
     def __repr__(self):
         return f"['{self.full_path}': '{self.is_modified}']"
 
@@ -621,7 +622,7 @@ class Line:
         self.filename = filename
         self.line_num = line_num
         self.line = line
-    
+
     def __str__(self):
         return f"{self.filename}:{self.line_num}\n\t{self.line}"
 
@@ -640,13 +641,13 @@ class Cmd:
 
     def compile_show(self):
         return " ".join(sorted(self.target))
-    
+
     def summarized_show(self):
         return " ".join([os.path.basename(target) for target in sorted(self.target)])
 
     def update(self, other):
         self.line = other.line
-    
+
     def __eq__(self, other):
         return self.cmd == other.cmd and \
                self.dep == other.dep and \
@@ -656,7 +657,7 @@ class Cmd:
 class GraphDB:
 
     def __init__(self, db_version):
-        self.nodes = dict() 
+        self.nodes = dict()
         self.graph = igraph.Graph(directed=True)
         self.last_cmds = set()
         self.db_version = db_version
@@ -664,7 +665,7 @@ class GraphDB:
     def sub_graph_nodes(self, sub_nodes=[]):
         if sub_nodes == []:
             return [key for key, fentry in self.nodes.items() if fentry.entry_type != FileEntry.EntryType.CMD]
-        
+
         vertecies = set()
         for node in sub_nodes:
             try:
@@ -693,7 +694,7 @@ class GraphDB:
         connections = [(from_node, to_node) for (from_node, to_node) in connections \
                             if not self.graph.are_connected(from_node, to_node)]
         self.graph.add_edges(connections)
-    
+
     def remove_connections(self, connections):
         self.graph.delete_edges(connections)
         for dep, target in connections:
@@ -722,7 +723,7 @@ class GraphDB:
                 fentry.init()
 
     @staticmethod
-    def load_graph(): 
+    def load_graph():
         pathname = os.path.realpath(__file__)
         db_file_entry = FileEntry(pathname, FileEntry.EntryType.FILE)
         db_version = db_file_entry.md5sum
@@ -736,7 +737,7 @@ class GraphDB:
                 return data
         except FileNotFoundError:
             return GraphDB(db_version)
-    
+
     def get_nodes(self, wanted_type=None):
         for name, node in self.nodes.items():
             if wanted_type:
@@ -761,10 +762,10 @@ class GraphDB:
             del self.nodes[node]
             indecies.append(self.graph.vs.find(node).index)
         self.graph.delete_vertices(indecies)
-    
+
     def topological_sort(self):
         return [self.graph.vs[i]["name"] for i in self.graph.topological_sorting()]
-    
+
     def subgraph_topological_sort(self, sub_nodes):
         vertecies = set()
         for node in sub_nodes:
@@ -773,7 +774,7 @@ class GraphDB:
                 vertecies.update(self.graph.subcomponent(idx_node, mode="in"))
             except ValueError:
                 continue
-        
+
         sub_graph = self.graph.subgraph(vertecies)
         return [sub_graph.vs[i]["name"] for i in sub_graph.topological_sorting()]
 
@@ -849,7 +850,7 @@ class CmdTemplate:
                 if fnmatch.fnmatch(global_target, dep_fmt_fullpath):
                     manual_deps.add(global_target)
                     added = True
-        
+
             if added == False:
                 raise RuntimeError(f"{self.line}: manual dep '{dep_fmt}' is not exists as target in other commands")
 
@@ -863,12 +864,12 @@ class CmdTemplate:
                 files = self._iterate_file_glob(graph, source_fmt, all_targets)
                 files.update(generated_sources)
                 self._create_foreach_cmd(files, manual_deps, all_targets, graph)
-                    
+
         else:
             deps = set()
             sources = set()
             generated_sources = set()
-            
+
             deps.update(manual_deps)
             fs_sources = []
             for source_fmt in self.sources_fmt:
@@ -894,10 +895,10 @@ class CmdTemplate:
                 noext = None
                 dirname = None
                 parent_dir = None
-                
+
                 if fs_sources:
                     full_path = sorted(fs_sources)[0]
-                
+
                 if full_path is not None:
                     basename = os.path.basename(full_path)
                     noext = os.path.splitext(basename)[0]
@@ -924,7 +925,7 @@ class CmdTemplate:
             deps.update(sources)
             deps.update(generated_sources)
             self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root))
-        
+
 
 def find_between(string, token_start, token_end):
     state = "find_token_start"
@@ -945,10 +946,10 @@ def find_between(string, token_start, token_end):
 class UMakeFileParser():
     """
     HELLO = 1
-    : a.c > gcc {filename} -o {target} > {filename}.o  
-    : > gcc {filename} -o {target} > {filename}.o  
-    :foreach *.c > gcc {filename} -o {target} > {basename}.o  
-    :foreach | sdf > gcc {filename} -o {target} > {basename}.o  
+    : a.c > gcc {filename} -o {target} > {filename}.o
+    : > gcc {filename} -o {target} > {filename}.o
+    :foreach *.c > gcc {filename} -o {target} > {basename}.o
+    :foreach | sdf > gcc {filename} -o {target} > {basename}.o
     """
     def __init__(self, filename):
         self.fielanme = filename
@@ -958,31 +959,31 @@ class UMakeFileParser():
         self.globals_vars = dict()
         self.macros = dict()
         self.parse_file(filename)
-    
+
     def load_file(self, filename):
         with open(filename, mode="r") as umakefile:
             return umakefile.read()
 
     def parse_file(self, umakefile, workdir=ROOT, in_variant=False, use_current_variant=False):
-        
+
         if workdir is None:
             workdir = ROOT
 
         def should_line_parsing_stopped(in_variant, use_current_variant):
             return in_variant and not use_current_variant
-        
+
         for line_num, line in enumerate(self.load_file(join(workdir, umakefile)).splitlines()):
             try:
                 foreach = False
                 deps_fmt = []
                 source_fmt = []
-                
+
                 if line == "" or line[0] == "#":
                     if line == "" and in_variant:
                         in_variant = False
                         use_current_variant = False
                     continue
-                
+
                 if line[0] == ":":
                     if should_line_parsing_stopped(in_variant, use_current_variant):
                         continue
@@ -995,7 +996,7 @@ class UMakeFileParser():
                         macro_args_defaults = self.macros[macro_name][2]
                         if macro_args_sent == ['']:
                             macro_args_sent = []
-                        
+
                         for idx, in_macro_args in enumerate(macro_args):
                             try:
                                 sent_arg = macro_args_sent[idx]
@@ -1108,10 +1109,10 @@ class UMakeFileParser():
                             workdir = join(ROOT, config_value)
                     elif config_name == "include":
                         self.parse_file(config_value, workdir, in_variant, use_current_variant)
-                        
+
                 else:
                     raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
-                    
+
 
             except:
                 out.print_fail(f"ERROR failed to parse UMakefile")
@@ -1128,7 +1129,7 @@ class UMake:
         self.graph = None
 
         self._start_executer_thread()
-    
+
     def _init_build(self):
         shutil.rmtree(UMKAE_TMP_DIR, ignore_errors=True)
         os.makedirs(UMKAE_TMP_DIR, exist_ok=True)
@@ -1204,11 +1205,11 @@ class UMake:
         for del1 in delete:
             connection.remove(del1)
         self.graph.remove_node(cmd.cmd)
-    
+
     def _graph_add_cmd_node(self, cmd: Cmd, connections: set):
         fentry_cmd = FileEntry(cmd.cmd, FileEntry.EntryType.CMD, cmd)
         self.graph.add_node(cmd.cmd, fentry_cmd)
-        
+
         for target in cmd.target:
             self.graph.add_node(target, FileEntry(target, FileEntry.EntryType.GENERATED, cmd))
             connections.add((cmd.cmd, target))
@@ -1226,7 +1227,7 @@ class UMake:
             if not self.graph.is_exists(target):
                 self.graph.add_node(target, FileEntry(target, FileEntry.EntryType.GENERATED, new_cmd))
             connections.add((new_cmd.cmd, target))
-        
+
         for dep in new_cmd.dep:
             connections.add((dep, new_cmd.cmd))
 
@@ -1269,7 +1270,7 @@ class UMake:
                 # self.graph.remove_node(remove_cmd)
                 delete_nodes.add(remove_cmd)
             self.graph.remove_node(delete_nodes)
-            
+
             connections = set()
             for cmd_template in umakefile.cmds_template:
                 for cmd in cmd_template.cmds:
@@ -1287,7 +1288,7 @@ class UMake:
                 all_targets_exists = any(target in all_targets for target in global_config.targets)
                 if not all_targets_exists:
                     raise RuntimeError(f"target not exist {global_config.targets}")
-    
+
     def executer_thread(self):
         cache_mgr = CacheMgr()
         while True:
@@ -1312,7 +1313,7 @@ class UMake:
         self.n_jobs -= 1
         if execucter.is_ok is False:
             raise CmdFailedErr(f"command failed: {execucter.cmd.line}\n cmd:\n\t {execucter.cmd.cmd}")
-        
+
         deps, targets = execucter.get_results()
         node = execucter.cmd.cmd
 
@@ -1348,13 +1349,13 @@ class UMake:
                     out.print(e)
                     continue
                 self.graph.add_node(dep, fentry)
-            
+
             if not self.graph.graph.are_connected(dep, node):
                 conns.append((dep, node))
         # with Timer(f"connections {execucter.cmd.summarized_show()}: {len(conns)}", color=bcolors.FAIL):
         #     self.graph.add_connections(conns)
         add_conns_out.extend(conns)
-        
+
         del_cons = set()
         # kepp user conigured deps
         preds = preds - execucter.cmd.dep
@@ -1368,7 +1369,7 @@ class UMake:
             target_node = self.graph.get_data(target)
             target_node.increase_dependencies_built(-1)
             target_node.update()
-        
+
         if targets and not execucter.is_from_cache:
             self._set_deps_hash(node_entry, execucter)
 
@@ -1419,7 +1420,7 @@ class UMake:
                 continue
             while node_entry.dependencies_built > 0:
                 self._handle_done(add_conns, del_conns)
-            
+
             successors = set()
             for succ in self.graph.successors(node):
                 succ_node = self.graph.get_data(succ)
@@ -1430,7 +1431,7 @@ class UMake:
             if node_entry.entry_type == FileEntry.EntryType.CMD:
                 deps_hash, cached_deps, metadata_hash = self._get_deps_hash(node_entry)
                 execucter = CmdExecuter(successors, "", node_entry.data)
-                
+
                 execucter.cmd_hash = node_entry.md5sum
                 execucter.metadata_hash = metadata_hash
                 execucter.deps_hash = deps_hash
@@ -1439,11 +1440,11 @@ class UMake:
                 self.n_jobs += 1
             else:
                 node_entry.set_modified(False)
-        
+
         if self.n_jobs:
             while self._handle_done(add_conns, del_conns):
                 pass
-        
+
         self.graph.add_connections(add_conns)
         self.graph.remove_connections(del_conns)
 
@@ -1458,7 +1459,7 @@ class UMake:
 
     def cache_gc(self):
         self.cache_mgr.gc()
-    
+
     def run(self):
         fd, lock_path = fs_lock(UMAKE_ROOT_DIR)
         if fd == None:
@@ -1483,10 +1484,10 @@ class UMake:
     def show_target_details(self, target):
         target_fentry: FileEntry
         target_fentry = self.graph.get_data(target)
-        
+
         cmd = target_fentry.data.cmd
         all_deps = set(self.graph.predecessors(cmd))
-        
+
         configured_deps = sorted(target_fentry.data.dep - target_fentry.data.manual_deps)
         manual_deps = sorted(target_fentry.data.manual_deps)
         auto_deps = all_deps - target_fentry.data.dep
@@ -1497,7 +1498,7 @@ class UMake:
         global_auto_deps = sorted(auto_deps - auto_dep_in_project)
         auto_dep_in_project = sorted(auto_dep_in_project)
         successors = set(self.graph.successors(target))
-        
+
         if global_config.json_file:
             with open(global_config.json_file, "w") as f:
                 import json
@@ -1538,7 +1539,7 @@ class UMake:
         generated = self.graph.get_nodes(FileEntry.EntryType.GENERATED)
         for idx, target in enumerate(sorted(generated)):
             print(f'{idx:4} {target.replace(ROOT + "/", "")}')
-    
+
     def clean(self):
         generated = self.graph.get_nodes(FileEntry.EntryType.GENERATED)
         with Timer("done cleaning targets"):
@@ -1575,7 +1576,7 @@ class UMake:
         umake.parse_cmd_files()
         for target in targets:
             self.show_targets_details(target)
-    
+
     def show_parsed_umakefile(self):
         self.load_graph()
         UMakefile = join(ROOT , "UMakefile")
@@ -1601,31 +1602,31 @@ else:
 
     parser.add_argument('-d', '--details', action='store_true',
                         help='details about the target')
-    
+
     parser.add_argument('--json', action='store', dest='json_file',
                         help='output as json')
-    
+
     parser.add_argument('--show-all-targets', action='store_true', dest="show_all_targets",
                         help="show all targets configured in UMakefile")
 
     parser.add_argument('--show-parsed-umakefile', action='store_true', dest="show_parsed_umakefile",
                         help="show parsed umakefile")
-    
+
     parser.add_argument('--no-remote-cache', action='store_true', dest="no_remote_cache",
                         help="don't use remote cache")
 
     parser.add_argument('--no-local-cache', action='store_true', dest="no_local_cache",
                         help="don't use local cache")
-    
+
     parser.add_argument('--remote-cache-stats', action='store_true', dest="remote_cache_stats",
                         help="show stats of remote cache")
 
     parser.add_argument('--remote-cache-delete', action='store_true', dest="remote_cache_delete",
                         help="WARNING: delete all remote cache objects")
-    
+
     parser.add_argument('-v', '--variant', action='store', dest="variant",
                         help="compile with diffrent variants")
-    
+
     parser.add_argument('--clean', action='store_true', dest="clean",
                         help="clean umake file, with all targets")
 
@@ -1633,23 +1634,23 @@ else:
 
     if args.json_file:
         global_config.json_file = args.json_file
-    
+
     if args.no_remote_cache:
         global_config.remote_cache = False
-    
+
     if args.no_local_cache:
         global_config.local_cache = False
-    
+
     if args.remote_cache_stats:
         mc = MinioCache()
         mc.get_cache_stats()
         os.sys.exit(0)
-    
+
     if args.remote_cache_delete:
         mc = MinioCache()
         mc.clear_bucket()
         os.sys.exit(0)
-    
+
     if args.show_all_targets:
         umake.load_graph()
         umake.show_all_targets()
@@ -1661,7 +1662,7 @@ else:
     if args.show_parsed_umakefile:
         umake.show_parsed_umakefile()
         os.sys.exit(0)
-    
+
     if args.clean:
         umake.load_graph()
         umake.clean()
@@ -1674,7 +1675,7 @@ else:
         args.targets = [join(ROOT, t) for t in args.targets]
         global_config.targets = args.targets
         umake.run()
-    
+
 #set(self.graph.graph.vs.select(_degree=80))
 
 # print(profiler.output_text(color=True))
