@@ -12,6 +12,11 @@ influenced by [`tup`](http://gittup.org/tup/).
 * auto dependency discovery using strace
 * simple configuration language
 
+Since a lot of the core concepts from tup apply to umake it is highly recommended to read the following:
+
+* http://gittup.org/tup/ex_dependencies.html
+* http://gittup.org/tup/make_vs_tup.html
+
 Running example
 ---------------
 
@@ -288,3 +293,15 @@ optional arguments:
 
 ```
 
+Talking about UMake:
+--------------------
+This section includes link to various places around the web that reason about umake.
+We believe that by reviewing questions and opinions that other people wrote about umake one can learn more about it.
+So without further ado is here is the list:
+
+* [DriveNets blog](https://drivenets.com/blog/the-inside-story-of-how-we-optimized-our-own-build-system/)
+* [Reddit r/bazel](https://www.reddit.com/r/bazel/comments/fa084s/how_we_optimised_our_build_system_using_umake/)
+* [Reddit r/cpp](https://www.reddit.com/r/cpp/comments/f9yjxn/how_we_optimised_our_build_system_using_umake/)
+* [Reddit r/gcc](https://www.reddit.com/r/gcc/comments/faiqum/how_we_optimised_our_build_system_using_umake/)
+
+Have another story to share about umake? just open a PR with a change to this list and we'll merge it in.
