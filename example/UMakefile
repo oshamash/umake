@@ -1,2 +1,2 @@
-:foreach *.c > gcc -c {filename} -o {target} > *.o
+:foreach *.c > gcc -c {filename} -o {target} > {noext}.o
 : *.o >  gcc {filename} -o {target} > hello_world
