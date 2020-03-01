@@ -717,8 +717,8 @@ class GraphDB:
     def init(self):
         for node in self.get_nodes():
             fentry: FileEntry = self.get_data(node)
-            if fentry.entry_type == FileEntry.EntryType.CMD:
-                self.last_cmds.add(node)
+            # if fentry.entry_type == FileEntry.EntryType.CMD:
+                # self.last_cmds.add(node)
             elif fentry.entry_type == FileEntry.EntryType.FILE:
                 fentry.init()
 
@@ -730,6 +730,8 @@ class GraphDB:
         try:
             with open(UMAKE_DB, "rb") as db_file:
                 data: GraphDB = pickle.load(db_file)
+                return data
+                # don't use it for now
                 if data.db_version != db_version:
                     out.print_file_deleted(f"umake changed deleting db {UMAKE_DB}")
                     os.remove(UMAKE_DB)
@@ -1283,6 +1285,7 @@ class UMake:
                         self._graph_add_cmd_node(cmd, connections)
             self.graph.add_connections(connections)
 
+            self.graph.last_cmds = cmds
             # check target request exists
             if global_config.targets:
                 all_targets_exists = any(target in all_targets for target in global_config.targets)
