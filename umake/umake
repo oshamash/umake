@@ -719,7 +719,7 @@ class GraphDB:
             fentry: FileEntry = self.get_data(node)
             # if fentry.entry_type == FileEntry.EntryType.CMD:
                 # self.last_cmds.add(node)
-            elif fentry.entry_type == FileEntry.EntryType.FILE:
+            if fentry.entry_type == FileEntry.EntryType.FILE:
                 fentry.init()
 
     @staticmethod
