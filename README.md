@@ -18,6 +18,14 @@ influenced by [`tup`](http://gittup.org/tup/).
 
 [UMakefile](doc/umakefile.md)
 
+Install
+-------
+```
+git clone https://github.com/grisha85/umake.git
+cd umake
+pip install .
+```
+
 Running example
 ---------------
 ```
