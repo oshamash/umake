@@ -40,8 +40,8 @@ def fnmatch(name, pat):
     If you don't want this, use fnmatchcase(FILENAME, PATTERN).
     """
     import os
-    name = os.path.normcase(name)
-    pat = os.path.normcase(pat)
+    # name = os.path.normcase(name)
+    # pat = os.path.normcase(pat)
     return fnmatchcase(name, pat)
 
 

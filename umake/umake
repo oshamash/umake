@@ -3,8 +3,8 @@ import time
 from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
 from umake import config
 
-# from pyinstrument import Profiler
-# profiler = Profiler()
+#from pyinstrument import Profiler
+#profiler = Profiler()
 
 out = InteractiveOutput()
 
@@ -536,9 +536,9 @@ class CmdExecuter:
 
 def join_paths(root, rest):
     if rest[0] == "/":
-        ret = join(ROOT, rest[1:])
+        ret = f"{ROOT}/{rest[1:]}"
     else:
-        ret = join(root, rest)
+        ret = f"{root}/{rest}"
     return ret
 
 class FileEntry:
@@ -882,7 +882,6 @@ class CmdTemplate:
                     is_found = True
 
                 source_fmt_fullpath = join_paths(self.root, source_fmt)
-                source_dir = os.path.dirname(source_fmt_fullpath)
                 for global_target in all_targets:
                     if fnmatch.fnmatch(global_target, source_fmt_fullpath):
                         is_found = True
@@ -1250,11 +1249,9 @@ class UMake:
                         new_fentry = self._get_file_entry(f)
                         self.graph.add_node(f, new_fentry)
                 for cmd in cmd_template.cmds:
-                    if self.graph.is_exists(cmd.cmd):
-                        cmd_fentry = self.graph.get_data(cmd.cmd)
                     cmds.add(cmd.cmd)
             removed_cmds = last_cmds.difference(cmds)
-
+            
             delete_nodes = set()
             for remove_cmd in removed_cmds:
                 remove_cmd_list = list(self.graph.successors(remove_cmd))
@@ -1297,6 +1294,7 @@ class UMake:
         while True:
             executer: CmdExecuter
             executer = self.jobs_queue.get()
+            #profiler.start()
             out.n_active_workers.inc()
             out.curr_job = executer.cmd.summarized_show()
             out.print(f"{executer.cmd.cmd}")
@@ -1308,6 +1306,7 @@ class UMake:
                 out.print(e)
                 executer.is_ok = False
             out.n_active_workers.dec()
+            #profiler.stop()
             self.done_queue.put(executer)
 
     def _handle_done(self, add_conns_out, del_conns_out):
@@ -1474,9 +1473,8 @@ class UMake:
             self.load_graph()
             self.scan_fs()
             self.parse_cmd_files()
-            # profiler.start()
             self.execute_graph()
-            # profiler.stop()
+            #print(profiler.output_text(color=True))
             self.dump_graph()
             self.cache_gc()
             out.update_bar(force=True)
