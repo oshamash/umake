@@ -2,6 +2,8 @@ UMake
 =====
 **Blazing Fast. Sub second Modification detection. Just a few seconds for cached compilation**
 
+![dpdk build](doc/images/dpdk-build/dpdk-build.gif)
+
 Overview
 --------
 UMake is a build system that building your projects.
@@ -49,6 +51,10 @@ This section lists all the various configurations that umake supports
 | UMAKE_CONFIG_MINIO_URL         | A url to use to access minio                               |
 | UMAKE_CONFIG_LOCAL_CACHE_SIZE  | The maximal size in bytes of the cache to store locally    |
 | UMAKE_CONFIG_ROOT              | The root directory in which all umake files will be stored |
+
+Real Life Examples
+------------------
+[DPDK build](doc/dpdk-build.md)
 
 
 Talking about UMake:
