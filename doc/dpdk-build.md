@@ -28,4 +28,4 @@ make prepare
 ## Remarks and Conclusions
 
 - This is not full port of DPDK compilation to `umake`.
-- In most compilations there are limited number of files that are being changed, so `umake` can increase dramatically compilation speed. This is especially true for CI builds.
+- In most compilations there are limited number of files that are being changed, so `umake` can increase dramatically compilation speed. This is especially true for CI builds. 
