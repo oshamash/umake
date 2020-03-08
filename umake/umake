@@ -93,6 +93,7 @@ class Config:
         self.local_cache = True
         self.targets = []
         self.variant = "default"
+        self.compile_commands = False
 
 
 global_config = Config()
@@ -564,7 +565,6 @@ class FileEntry:
 
     def init(self):
         self.dependencies_built = 0
-
 
     def set_modified(self, new_value: bool):
         self.is_modified = new_value
@@ -1462,12 +1462,46 @@ class UMake:
     def cache_gc(self):
         self.cache_mgr.gc()
 
+    def create_compilation_database(self):
+        """
+        Create a compilation database based on the graph of the project.
+        Example entry for compilation database:
+        [
+            { "directory": "/home/user/llvm/build",
+              "command": "/usr/bin/clang++ -Irelative -DSOMEDEF=\"With spaces, quotes and \\-es.\" -c -o file.o file.cc",
+              "file": "file.cc" },
+            ...
+        ]
+
+        For more details on compilation databases refer to:
+        https://clang.llvm.org/docs/JSONCompilationDatabase.html
+        """
+        cmds = []
+        for node in self.graph.nodes.values():
+            # We only care about the commands that are executed, skip eveything else.
+            if node.entry_type != FileEntry.EntryType.CMD:
+                continue
+
+            # Note that a single command might have multiple targets.
+            # Each target is a different file, thus it should be a different entry.
+            for cur_file in node.data.target:
+                cmds.append({
+                    'directory': '/',
+                    'command': str(node.data.cmd),
+                    'file': str(cur_file),
+                })
+
+        import json
+        with open('compile_commands.json', 'w') as db_file:
+            json.dump(cmds, db_file)
+
     def run(self):
         fd, lock_path = fs_lock(UMAKE_ROOT_DIR)
         if fd == None:
             out.print_fail(f"another umake is running!, if you sure it's not running remove {UMAKE_ROOT_DIR}.lock")
             os.sys.exit(-1)
             return
+
         try:
             self._init_build()
             self.load_graph()
@@ -1476,6 +1510,8 @@ class UMake:
             self.execute_graph()
             #print(profiler.output_text(color=True))
             self.dump_graph()
+            if global_config.compile_commands:
+                self.create_compilation_database()
             self.cache_gc()
             out.update_bar(force=True)
             out.destroy()
@@ -1631,7 +1667,12 @@ else:
     parser.add_argument('--clean', action='store_true', dest="clean",
                         help="clean umake file, with all targets")
 
+    parser.add_argument('--compile-commands', action='store_true', dest="compile_commands",
+                        help="Create compile_commands.json file with info on the build")
+
     args = parser.parse_args()
+
+    global_config.compile_commands = args.compile_commands
 
     if args.json_file:
         global_config.json_file = args.json_file
