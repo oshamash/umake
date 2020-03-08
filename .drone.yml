@@ -1,0 +1,12 @@
+--- 
+kind: pipeline
+name: default
+steps: 
+  - 
+    commands: 
+      - "pip3 install --upgrade ."
+      - "cd test && python3.6 test.py"
+    image: grisha85/umake
+    pull: if-not-exists
+    name: test
+type: docker
