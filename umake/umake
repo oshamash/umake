@@ -844,6 +844,9 @@ class CmdTemplate:
         wild_card_exists = False
         target_found = False
 
+        if not all_targets:
+            return False
+
         if "*" in target_fmt:
             wild_card_exists = True
 
@@ -897,7 +900,7 @@ class CmdTemplate:
                     is_found = True
 
                 source_fmt_fullpath = join_paths(self.root, source_fmt)
-                if self._find_target_in_all_targets(source_fmt_fullpath, all_targets, generated_sources) is False:
+                if not (self._find_target_in_all_targets(source_fmt_fullpath, all_targets, generated_sources) or is_found):
                     raise RuntimeError(f"[{source_fmt_fullpath}] {self.line}:\n \t\tsource mentioned in umakefile not exists")
 
             targets = set()
