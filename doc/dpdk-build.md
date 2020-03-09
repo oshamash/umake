@@ -26,14 +26,14 @@ make prepare
 1. strace has huge performance penalty
 
 ## How the port to `umake` was made
-- output of verbose `ninja` compilation was saved to a file: [ninja compilation output](https://github.com/grisha85/dpdk/blob/master/ninja)
-- this output was parsed with a [python script](https://github.com/grisha85/dpdk/blob/master/parse_ninja.py) to `UMakefile` 
+- Output of verbose `ninja` compilation was saved to a file: [ninja compilation output](https://github.com/grisha85/dpdk/blob/master/ninja)
+- The output was parsed with a [python script](https://github.com/grisha85/dpdk/blob/master/parse_ninja.py) to `UMakefile` 
 
 
 ## Remarks
 
 - This is not full port of DPDK compilation to `umake`.
-- This is especially true for CI builds.
+- The generated UMakefile is not an ideal one, check documentation for better usage of `wildcards`, `varaints`, etc..
 
 # Conclusion
-**In most compilations there are limited number of files that are being changed, so `umake` can increase dramatically compilation speed (11-16 times faster).**
+**In most compilations there are limited number of files that are being changed, so `umake` can increase dramatically compilation speed (11-16 times faster). This is especially true for CI builds.**
