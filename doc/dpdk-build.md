@@ -28,7 +28,7 @@ make prepare
 ## How the port to `umake` was made
 - output of verbose `ninja` compilation was saved to a file: [ninja compilation output](https://github.com/grisha85/dpdk/blob/master/ninja)
 - this output was parsed with a [python script](https://github.com/grisha85/dpdk/blob/master/parse_ninja.py) to `UMakefile` 
-- 
+
 
 ## Remarks
 
