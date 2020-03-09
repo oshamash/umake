@@ -13,10 +13,10 @@ Influenced by [`tup`](http://gittup.org/tup/). With the features below your comp
 #### `Local cache`
 many base libraries in your project rarelly changed, why recompile them over and over again. Local cache reduce compilation times and remote cahce access.
 
-### `Remote cache`
+#### `Remote cache`
 someone already compiled most of the libraries in your project, use those results.
 
-### `Auto dependency discovery`
+#### `Auto dependency discovery`
 makes your life easier to create build scripts no matter what your tool is: `gcc`, `protoc`, `docker build` ...
 
 
