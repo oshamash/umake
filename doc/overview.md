@@ -8,10 +8,9 @@ Since a lot of the core concepts from tup apply to umake it is highly recommende
 
 Why UMake
 ---------
-- Fast modification detection (sub second event for large projects)
+- Fast modification detection (sub second even for large projects)
 - More parallelism due to DAG (more details later)
 - Fast re-compilation, with built-in cache (local-cache, remote-cache)
-
 
 
 My First UMakfile
@@ -28,23 +27,25 @@ main()
     return 0;
 }
 ```
+
+
 `UMakefile`:
 ```
 : a.c > gcc -c {filename} {target} > a.o
 ```
-the command parsed to the following `bash` command
+the rule above parsed to the following command
 ```
 gcc -c a.c a.o
 ```
 
-### Graph after parsing
+### Graph of the rule above
 ![ ](./images/overview/1.png)
 
 
-### Graph after running the cmd
+### Graph after executing the rule
 ![ ](images/overview/2.png)
 
-Now if any of the nodes (`a.c`, `dep_a.h`, `gcc -c a.c a.o` or `a.o`) will be modified, `a.o` will be regenerated.
+Now if any of the nodes (`a.c`, `dep_a.h`, `gcc -c a.c a.o` or `a.o`) will be modified, `a.o` will be regenerated. umake use both timestamps and hashes to check for modifications.
 
 Targets as dependencies
 ----------------------
@@ -60,23 +61,24 @@ main()
     return 0;
 }
 ```
-Lets have another "compilation" command that generates headers that used by other command:
+Lets have another rule that generates header which will be used by other another rule.
 
+`UMakefile`:
 ```
 : a.proto > protoc {filename} > a.pb-c.h a.pb-c.c
 : b.c > gcc -c {filename} {target} > b.o
 ```
-
-### Graph after parsing
+first rule above is generating header `a.pb-c.h` that `b.c` is including.
+### Graph after parsing the rules
 ![ ](images/overview/3.png)
 
 
-Now we have copmilation ordering issue. `b.o` might be compiled before `a.proto` because nothing enforce the ordering between `a.proto` and `b.o`
+Now we have copmilation ordering issue. `b.o` might be generated before `a.pb-c.h` because nothing enforce the order between and `b.o` and `a.pb-c.h`.
 
-When running this `UMakefile` as is, an error will be generated. This is because command using other target (to generate `b.o` we accessing `a.pb-c.h` which is also generated)
+When running the above `UMakefile`, an error will be reported. This is because second rule using target of the the first rule internally (to generate `b.o`, `a.pb-c.h` is needed)
 
 ### Manual Dependency: `|`
-In order to fix this order issue we need to tell `umake` that generating `b.o` should come only after `a.pb-c.h`. We would use `| a.pb-c.h` for that.
+In order to fix this order issue we need to tell `umake` that generating `b.o` should come only after `a.pb-c.h` is generated. We would use `| a.pb-c.h` for that.
 
 `UMakefile`:
 ```
@@ -84,11 +86,11 @@ In order to fix this order issue we need to tell `umake` that generating `b.o` s
 : b.c | a.pb-c.h > gcc -c {filename} {target} > b.o
 ```
 
-### Graph after parsing
+### Graph after parsing the above UMakefile
 ![ ](images/overview/4.png)
 
 
-:foreach
+:foreach rule
 --------
 
 ```

@@ -9,12 +9,18 @@ A single `command` is generated for this rule
 `:` source `|` manual-deps `>` cmd `>` target
 
 `manual-deps` - targets the this target depends on, helps keep a correct build order
+
 `cmd` - bash command
+
 `target` - the output of the command
 
+
 `{filename}` - full path filename of the source `/my/path/filename.a`
+
 `{dir}` - directory containing the source `/my/path/`
+
 `{noext}` - filename without extension `filename`
+
 `{target}` - expanded target `helloworld.a`
 
 Example:

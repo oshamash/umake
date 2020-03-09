@@ -7,12 +7,18 @@ UMake
 Overview
 --------
 UMake is a build system that building your projects.
-influenced by [`tup`](http://gittup.org/tup/).
+Influenced by [`tup`](http://gittup.org/tup/). With the features below your compilation speed will be on average dramatically reduced, either after branch change either with your `CI` builds.
 
-* local cache - disk cache
-* remote cache - minio
-* auto dependency discovery using strace
-* simple configuration language
+
+#### `Local cache`
+many base libraries in your project rarelly changed, why recompile them over and over again. Local cache reduce compilation times and remote cahce access.
+
+### `Remote cache`
+someone already compiled most of the libraries in your project, use those results.
+
+### `Auto dependency discovery`
+makes your life easier to create build scripts no matter what your tool is: `gcc`, `protoc`, `docker build` ...
+
 
 [Detailed overview](doc/overview.md)
 
