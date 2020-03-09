@@ -3,8 +3,8 @@ import time
 from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
 from umake import config
 
-#from pyinstrument import Profiler
-#profiler = Profiler()
+# from pyinstrument import Profiler
+# profiler = Profiler()
 
 out = InteractiveOutput()
 
@@ -840,29 +840,44 @@ class CmdTemplate:
                                             noext=noext)
                 self.cmds.append(Cmd(cmd, deps, manual_deps, {}, self.line, self.root))
 
+    def _find_target_in_all_targets(self, target_fmt, all_targets, found_targets):
+        wild_card_exists = False
+        target_found = False
+
+        if "*" in target_fmt:
+            wild_card_exists = True
+
+        # run fnmatch only on needed paths, if "*" no exists just search in set
+        if wild_card_exists:
+            for global_target in all_targets:
+                if fnmatch.fnmatch(global_target, target_fmt):
+                    found_targets.add(global_target)
+                    target_found = True
+        else:
+            if target_fmt in all_targets:
+                found_targets.add(target_fmt)
+                target_found = True
+
+        return target_found
+
+
     def create_cmds(self, graph: GraphDB, all_targets: set):
         full_path = None
         target = None
         manual_deps = set()
 
         for dep_fmt in self.deps_fmt:
-            added = False
-            for global_target in all_targets:
-                dep_fmt_fullpath = join_paths(self.root, dep_fmt)
-                if fnmatch.fnmatch(global_target, dep_fmt_fullpath):
-                    manual_deps.add(global_target)
-                    added = True
-
-            if added == False:
+            dep_fmt_fullpath = join_paths(self.root, dep_fmt)
+            if self._find_target_in_all_targets(dep_fmt_fullpath, all_targets, manual_deps) is False:
                 raise RuntimeError(f"{self.line}: manual dep '{dep_fmt}' is not exists as target in other commands")
 
         if self.foreach:
             for source_fmt in self.sources_fmt:
                 generated_sources = set()
-                for global_target in all_targets:
-                    src_fmt_fullpath = join_paths(self.root, source_fmt)
-                    if fnmatch.fnmatch(global_target, src_fmt_fullpath):
-                        generated_sources.add(global_target)
+                src_fmt_fullpath = join_paths(self.root, source_fmt)
+
+                self._find_target_in_all_targets(src_fmt_fullpath, all_targets, generated_sources)
+
                 files = self._iterate_file_glob(graph, source_fmt, all_targets)
                 files.update(generated_sources)
                 self._create_foreach_cmd(files, manual_deps, all_targets, graph)
@@ -882,12 +897,7 @@ class CmdTemplate:
                     is_found = True
 
                 source_fmt_fullpath = join_paths(self.root, source_fmt)
-                for global_target in all_targets:
-                    if fnmatch.fnmatch(global_target, source_fmt_fullpath):
-                        is_found = True
-                        generated_sources.add(global_target)
-
-                if is_found is False:
+                if self._find_target_in_all_targets(source_fmt_fullpath, all_targets, generated_sources) is False:
                     raise RuntimeError(f"[{source_fmt_fullpath}] {self.line}:\n \t\tsource mentioned in umakefile not exists")
 
             targets = set()
@@ -1506,9 +1516,11 @@ class UMake:
             self._init_build()
             self.load_graph()
             self.scan_fs()
+            # profiler.start()
             self.parse_cmd_files()
+            # profiler.stop()
             self.execute_graph()
-            #print(profiler.output_text(color=True))
+            # print(profiler.output_text(color=True, show_all=True))
             self.dump_graph()
             if global_config.compile_commands:
                 self.create_compilation_database()
@@ -1627,8 +1639,8 @@ class UMake:
             for cmd in cmd_template.cmds:
                 print(f"\t{cmd.cmd}")
 
-umake = UMake()
 if len(sys.argv) == 1:
+    umake = UMake()
     umake.run()
 else:
     import argparse
@@ -1693,6 +1705,7 @@ else:
         mc.clear_bucket()
         os.sys.exit(0)
 
+    umake = UMake()
     if args.show_all_targets:
         umake.load_graph()
         umake.show_all_targets()

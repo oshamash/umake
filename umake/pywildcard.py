@@ -39,7 +39,7 @@ def fnmatch(name, pat):
     if the operating system requires it.
     If you don't want this, use fnmatchcase(FILENAME, PATTERN).
     """
-    import os
+    # import os
     # name = os.path.normcase(name)
     # pat = os.path.normcase(pat)
     return fnmatchcase(name, pat)
