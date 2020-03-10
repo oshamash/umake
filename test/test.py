@@ -8,7 +8,7 @@ import json
 
 ROOT = os.getcwd()
 COVERAGE_DIR_PATH = os.path.join(ROOT, 'coverage')
-
+COVEARAGE_CMD = "coverage-3.6 run -a"
 class TestUMake(unittest.TestCase):
 
     def setUp(self):
@@ -22,7 +22,7 @@ class TestUMake(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        print(f"Creating coverage xml from coverage/.coverage")
+        print(f"\nCreating coverage xml from coverage/.coverage")
         check_output(f"coverage-3.6 xml -i -o {os.path.join(COVERAGE_DIR_PATH, 'coverage.xml')}", stderr=subprocess.STDOUT, shell=True)
         
     
@@ -86,7 +86,7 @@ class TestUMake(unittest.TestCase):
         if targets:
             targets_str = " ".join(targets) 
         try:
-            check_output(f"coverage-3.6 run /umake/umake/umake --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8")
+            print(check_output(f"{COVEARAGE_CMD} /umake/umake/umake --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8"))
             if should_fail:
                 self.assertTrue(False, msg="umake compiled although should fail")
         except subprocess.CalledProcessError as e:
@@ -95,7 +95,7 @@ class TestUMake(unittest.TestCase):
                 self.assertTrue(False, msg="Failed to run umake")
 
     def _assert_compilation(self, target, deps_conf=None, deps_manual=None, deps_auto_in=None):
-        check_output(f"coverage-3.6 run /umake/umake/umake {target} --no-local-cache --no-remote-cache --details --json json_out", shell=True, cwd="env/")
+        print(check_output(f"{COVEARAGE_CMD} /umake/umake/umake {target} --no-local-cache --no-remote-cache --details --json json_out", shell=True, cwd="env/"))
         with open("env/json_out") as f:
             deps = json.load(f)
         
