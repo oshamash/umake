@@ -9,10 +9,10 @@ Overview
 UMake is a build system that building your projects.
 Influenced by [`tup`](http://gittup.org/tup/). With the features below your compilation speed will be on average dramatically reduced, either after branch change either with your `CI` builds.
 
-![codecov](https://codecov.io/gh/grisha85/umake/branch/master/graph/badge.svg)
+[![codecov](https://codecov.io/gh/grisha85/umake/branch/master/graph/badge.svg)](https://codecov.io/gh/grisha85/umake/tree/master/umake)
 
 
-![droneio](http://xrayio.com/api/badges/grisha85/umake/status.svg)
+[![droneio](http://xrayio.com/api/badges/grisha85/umake/status.svg)](http://xrayio.com/grisha85/umake/)
 
 
 #### `Local cache`
