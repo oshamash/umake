@@ -1,3 +1,9 @@
+"""
+taken from https://github.com/agalera/python-wildcard
+LICENSE: GNU General Public License v3.0
+https://github.com/agalera/python-wildcard/blob/master/LICENSE.txt
+"""
+
 """Filename matching with shell patterns.
 
 fnmatch(FILENAME, PATTERN) matches according to the local convention.

@@ -1,12 +1,24 @@
 --- 
 kind: pipeline
 name: default
+type: docker
+
 steps: 
   - 
+    name: tests
     commands: 
       - "pip3 install --upgrade ."
       - "cd test && python3.6 test.py"
-    image: grisha85/umake
+    image: grisha85/umake:1
     pull: if-not-exists
-    name: test
-type: docker
+  
+  - name: coverage
+    image: plugins/codecov
+    settings:
+      token:
+        from_secret: CODECOV
+      required: true
+      files:
+        - "*.xml"
+      paths:
+        - test/coverage

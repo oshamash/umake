@@ -9,6 +9,11 @@ Overview
 UMake is a build system that building your projects.
 Influenced by [`tup`](http://gittup.org/tup/). With the features below your compilation speed will be on average dramatically reduced, either after branch change either with your `CI` builds.
 
+![codecov](https://codecov.io/gh/grisha85/umake/branch/master/graph/badge.svg)
+
+
+![droneio](http://xrayio.com/api/badges/grisha85/umake/status.svg)
+
 
 #### `Local cache`
 many base libraries in your project rarely changed, why recompile them over and over again. Local cache reduce compilation times and remote cache access.
@@ -28,6 +33,11 @@ makes your life easier to create build scripts no matter what your tool is: `gcc
 
 Install
 -------
+
+platform: linux (tests on ubuntu 18.04)
+
+dependencies: strace, bash
+
 ```
 git clone https://github.com/grisha85/umake.git
 cd umake
