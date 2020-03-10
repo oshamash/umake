@@ -697,15 +697,16 @@ class GraphDB:
 
     def remove_connections(self, connections):
         self.graph.delete_edges(connections)
+        vertices_to_del = set()
         for dep, target in connections:
             try:
                 vert = self.graph.vs.find(dep)
             except ValueError:
                 # it might not be exists
-                pass
+                continue
             if vert.degree() == 0:
-                self.graph.delete_vertices(vert.index)
-                del self.nodes[dep]
+                vertices_to_del.add(dep)
+        self.remove_node(vertices_to_del)
 
     def get_data(self, node) -> FileEntry:
         return self.nodes[node]
@@ -1578,7 +1579,7 @@ class UMake:
                 out.print_colored(f"\t\t{idx:4} {dep:70} [{self.graph.get_data(dep).md5sum.hex()}]", bcolors.OKBLUE)
             print()
             print("\tsuccessors targets:")
-            for succ in successors:
+            for succ in sorted(successors):
                 succ_targets = " ".join(sorted(set(self.graph.successors(succ))))
                 print(f"\t\t{succ_targets}")
             print()

@@ -487,7 +487,6 @@ int hellob_gen()
         umake = ": > ./a.sh > c"
         self._compile(umake)
         self._assert_compilation("c", deps_conf=[], deps_manual=[], deps_auto_in=["a", "a.sh", "b"])
-        
         self._create("a.sh", "/bin/cat a && echo n >> c\n")
         self._compile(umake)
         self._assert_compilation("c", deps_conf=[], deps_manual=[], deps_auto_in=["a", "a.sh"])
