@@ -34,7 +34,7 @@ makes your life easier to create build scripts no matter what your tool is: `gcc
 Install
 -------
 
-platform: linux (tests on ubuntu 18.04)
+platform: linux (tested on ubuntu 18.04)
 
 dependencies: strace, bash
 
