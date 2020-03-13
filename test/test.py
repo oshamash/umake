@@ -4,7 +4,7 @@ import subprocess
 import shutil
 import os
 import json
-
+import time
 
 ROOT = os.getcwd()
 COVERAGE_DIR_PATH = os.path.join(ROOT, 'coverage')
@@ -77,7 +77,7 @@ class TestUMake(unittest.TestCase):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
 
-    def _compile(self, umake, variant="", targets=[],should_fail=False):
+    def _compile(self, umake, variant="", targets=[], should_fail=False):
         with open('env/UMakefile', "w") as umakefile:
             umakefile.write(umake)
         if variant != "":
@@ -449,7 +449,6 @@ int hellob_gen()
 
         timestamps = {"a": 0, "b": 0, "c": 0, "d": 0}
         is_changed = {"a": True, "b": True, "c": True, "d": True}
-        
         self._compile(umake)
         timestamps = self._check_file_exists(["a", "b", "c", "d"], check_timestamp=timestamps, is_changed=is_changed)
         self._rm(["a", "b", "c", "d"])
@@ -483,7 +482,6 @@ int hellob_gen()
         self._create("b", "b")
         self._create("d", "d")
         self._create("a.sh", "/bin/cat a && /bin/cat b && echo n >> c\n")
-        
         umake = ": > ./a.sh > c"
         self._compile(umake)
         self._assert_compilation("c", deps_conf=[], deps_manual=[], deps_auto_in=["a", "a.sh", "b"])
@@ -509,6 +507,12 @@ int hellob_gen()
         self._compile(umake)
         self._check_file_exists(["other_dir/b"])
 
+    def test_clean_exit(self):
+        umake = ": > /bin/sleep 0.5 && cat f > \n"
+        umake += ": > /bin/sleep 10 > \n"
+        start = time.perf_counter()
+        self._compile(umake, should_fail=True)
+        assert time.perf_counter() - start < 1
 
 if __name__ == '__main__':
     unittest.main()

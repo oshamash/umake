@@ -1,12 +1,19 @@
 #!/usr/bin/python3.6
 import time
-from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB
+from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB, format_text
 from umake import config
 
 # from pyinstrument import Profiler
 # profiler = Profiler()
 
+
+class WorkerExit:
+    pass
+
+
 out = InteractiveOutput()
+worker_exit_code = WorkerExit()
+
 
 class Timer:
     def __init__(self, msg, threshold=0, color=bcolors.OKGREEN):
@@ -15,6 +22,7 @@ class Timer:
         self.prefix = ""
         self.threshold = threshold
         self.color = color
+        self.log_lines = list()
 
     def set_prefix(self, prefix):
         self.prefix = prefix
@@ -22,6 +30,9 @@ class Timer:
     def set_postfix(self, postfix):
         self.postfix = postfix
 
+    def add_log_line(self, msg):
+        self.log_lines.append(msg)
+    
     def __enter__(self):
         self.start = time.time()
         return self
@@ -29,8 +40,15 @@ class Timer:
     def __exit__(self, *args):
         self.end = time.time()
         self.interval = self.end - self.start
+        out_str = ""
         if self.interval > self.threshold:
-            out.print_colored(f"[{self.interval:.3f}] {self.prefix} {self.msg} {self.postfix}", self.color)
+            out_str += format_text(f"[{self.interval:.3f}] {self.prefix} {self.msg} {self.postfix}", self.color)
+        if self.log_lines:
+            if out_str:
+                out_str += "\n"
+            out_str += "\n".join(self.log_lines)
+        if out_str:
+            out.print_neutarl(out_str)
 
 
 class MetadataCache:
@@ -94,6 +112,7 @@ class Config:
         self.targets = []
         self.variant = "default"
         self.compile_commands = False
+        self.verbose = True
 
 
 global_config = Config()
@@ -381,23 +400,31 @@ def byte_xor(ba1, ba2):
     return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)])
 
 
-
-class CmdFailedErr(RuntimeError):
+class TargetNotGeneratedErr(Exception):
     pass
 
 
-class TargetExistsErr(RuntimeError):
+class CompilationFailedErr(Exception):
     pass
 
 
-class NotFileErr(RuntimeError):
+class CmdFailedErr(Exception):
     pass
 
 
-class DepIsGenerated(RuntimeError):
+class NotFileErr(Exception):
     pass
 
-class LineParseErr(RuntimeError):
+
+class DepIsGenerated(Exception):
+    pass
+
+
+class LineParseErr(Exception):
+    pass
+
+
+class CleanExitErr(Exception):
     pass
 
 
@@ -455,7 +482,7 @@ class CmdExecuter:
         path = args[2].split('"')[1]
         return self._check_in_root(path)
 
-    def make(self, cache_mgr: CacheMgr):
+    def make(self, cache_mgr: CacheMgr, is_exiting):
         tmp_unique_name_full_path = join(UMKAE_TMP_DIR, str(uuid.uuid1()))
         with Timer(self.cmd.compile_show(), color=bcolors.WARNING) as timer:
             if self.target:
@@ -474,27 +501,34 @@ class CmdExecuter:
 
             while True:
                 try:
-                    stdout, stderr = self.proc.communicate(timeout=3)
+                    stdout, stderr = self.proc.communicate(timeout=0.1)
                     break
                 except TimeoutExpired:
+                    if is_exiting() is False:
+                        # exiting
+                        self.proc.kill()
+                        raise CleanExitErr()
                     out.curr_job = self.cmd.summarized_show()
                     out.update_bar()
-            rc = self.proc.poll()
 
+            rc = self.proc.poll()
             stdout = stdout.decode("utf-8")
             stderr = stderr.decode("utf-8")
-
             if rc != 0:
-                out.print_neutarl(stdout)
-                out.print_fail(stderr)
+                timer.add_log_line(format_text(f"{self.cmd.line}", bcolors.FAIL))
+                timer.add_log_line(format_text(f"\t{self.cmd.cmd}", bcolors.BOLD))
+                if stderr:
+                    timer.add_log_line(format_text(f"\nError:\n\t\t{stderr}", ""))
+                if stdout:
+                    timer.add_log_line(format_text(f"\nt\t{stdout}", ""))
+                
+                raise CompilationFailedErr()
                 # TODO: print here the source of the command
             else:
                 if stdout:
-                    out.print(stdout)
+                    timer.add_log_line(stdout)
                 if stderr:
-                    out.print(stderr)
-                self.is_ok = True
-
+                    timer.add_log_line(stderr)
 
             self.dep_files = set()
             with open(tmp_unique_name_full_path) as strace_output:
@@ -521,8 +555,9 @@ class CmdExecuter:
                         continue
                     self.dep_files.add(full_path)
             if self.target:
-                if rc == 0 and not self.target.issubset(self.dep_files):
-                    raise RuntimeError(f"Target not generated: Expected {self.target} Got: {self.dep_files}")
+                if not self.target.issubset(self.dep_files):
+                    timer.add_log_line(format_text(f"Target not generated:\n \tExpected {self.target}\n \tGot: {self.dep_files}", bcolors.FAIL))
+                    raise TargetNotGeneratedErr()
                 self.dep_files -= self.target
 
                 deps_hash = self.cmd_hash
@@ -620,7 +655,7 @@ class FileEntry:
 class Line:
     def __init__(self, filename, line_num, line):
         self.filename = filename
-        self.line_num = line_num
+        self.line_num = line_num + 1
         self.line = line
 
     def __str__(self):
@@ -1140,22 +1175,22 @@ class UMake:
 
     def __init__(self):
         self.cache_mgr = CacheMgr()
-
         self.graph = None
+        self.worker_continue = True  # should wor
+        self.worker_threads = list()
 
-        self._start_executer_thread()
-
-    def _init_build(self):
+    def _init_build_dirs(self):
         shutil.rmtree(UMKAE_TMP_DIR, ignore_errors=True)
         os.makedirs(UMKAE_TMP_DIR, exist_ok=True)
         os.makedirs(UMAKE_BUILD_CACHE_DIR, exist_ok=True)
 
-    def _start_executer_thread(self):
+    def _start_executer_threads(self):
         self.jobs_queue = Queue() # CmdExecuter
         self.done_queue = Queue()
         self.n_jobs = 0
         for _ in range(UMAKE_MAX_WORKERS):
-            exec_thread = threading.Thread(target=self.executer_thread, daemon=True)
+            exec_thread = threading.Thread(target=self.executer_thread)
+            self.worker_threads.append(exec_thread)
             exec_thread.start()
 
     def _get_file_entry(self, full_path):
@@ -1209,7 +1244,7 @@ class UMake:
                     elif fentry.entry_type == FileEntry.EntryType.FILE:
                         self._remove_file_from_graph(f, deleted_set)
                     else:
-                        raise RuntimeError(f"trying to delete not file but {fentry.entry_type}. how can it be???")
+                        raise RuntimeError(f"trying to delete not file but type is {fentry.entry_type}. how can it be???")
             self.graph.remove_node(deleted_set)
 
     def _graph_remove_cmd_node(self, cmd: Cmd, connection):
@@ -1295,7 +1330,6 @@ class UMake:
                     else:
                         self._graph_add_cmd_node(cmd, connections)
             self.graph.add_connections(connections)
-
             self.graph.last_cmds = cmds
             # check target request exists
             if global_config.targets:
@@ -1305,30 +1339,38 @@ class UMake:
 
     def executer_thread(self):
         cache_mgr = CacheMgr()
-        while True:
+        while self.worker_continue:
             executer: CmdExecuter
             executer = self.jobs_queue.get()
-            #profiler.start()
+            
+            if type(executer) is WorkerExit:
+                return
+
             out.n_active_workers.inc()
             out.curr_job = executer.cmd.summarized_show()
-            out.print(f"{executer.cmd.cmd}")
             try:
-                executer.make(cache_mgr)
+                executer.make(cache_mgr, lambda: self.worker_continue)
+                executer.is_ok = True
+            except (CompilationFailedErr, TargetNotGeneratedErr, CleanExitErr) as e:
+                executer.is_ok = False
+                self._send_exits()
             except Exception as e:
                 import traceback
                 traceback.print_exc()
                 out.print(e)
                 executer.is_ok = False
+                self._send_exits()
             out.n_active_workers.dec()
-            #profiler.stop()
+            
             self.done_queue.put(executer)
+        
 
     def _handle_done(self, add_conns_out, del_conns_out):
         execucter: CmdExecuter
         execucter = self.done_queue.get()
         self.n_jobs -= 1
         if execucter.is_ok is False:
-            raise CmdFailedErr(f"command failed: {execucter.cmd.line}\n cmd:\n\t {execucter.cmd.cmd}")
+            raise CmdFailedErr()
 
         deps, targets = execucter.get_results()
         node = execucter.cmd.cmd
@@ -1460,6 +1502,9 @@ class UMake:
         if self.n_jobs:
             while self._handle_done(add_conns, del_conns):
                 pass
+        
+        # start terminating threads
+        self._send_exits()
 
         self.graph.add_connections(add_conns)
         self.graph.remove_connections(del_conns)
@@ -1509,6 +1554,20 @@ class UMake:
         with open('compile_commands.json', 'w') as db_file:
             json.dump(cmds, db_file)
 
+    def _send_exits(self):
+        if self.worker_continue is False:
+            return
+        self.worker_continue = False
+        for _ in range(UMAKE_MAX_WORKERS):
+            self.jobs_queue.put(worker_exit_code)
+
+    def _exit_nicelly(self):
+        # stop all executers
+        self._send_exits()
+        with Timer("done clean exit"):
+            for thread in self.worker_threads:
+                thread.join(timeout=1)
+
     def run(self):
         fd, lock_path = fs_lock(UMAKE_ROOT_DIR)
         if fd == None:
@@ -1517,7 +1576,8 @@ class UMake:
             return
 
         try:
-            self._init_build()
+            self._start_executer_threads()
+            self._init_build_dirs()
             self.load_graph()
             self.scan_fs()
             # profiler.start()
@@ -1530,9 +1590,17 @@ class UMake:
                 self.create_compilation_database()
             self.cache_gc()
             out.update_bar(force=True)
-            out.destroy()
+        except CmdFailedErr:
+            os.sys.exit(-1)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            out.print(e)
+            os.sys.exit(-1)
         finally:
             fs_unlock(fd, lock_path)
+            self._exit_nicelly()
+            out.destroy()
 
     def show_target_details(self, target):
         target_fentry: FileEntry
@@ -1625,8 +1693,8 @@ class UMake:
                 self.show_target_details(graph_target)
 
     def show_target_details_run(self, targets):
-        umake.load_graph()
-        umake.parse_cmd_files()
+        self.load_graph()
+        self.parse_cmd_files()
         for target in targets:
             self.show_targets_details(target)
 
@@ -1642,99 +1710,105 @@ class UMake:
             print(cmd_template.cmd_fmt)
             for cmd in cmd_template.cmds:
                 print(f"\t{cmd.cmd}")
+    
+    def parse_args(self):
+        import argparse
+        parser = argparse.ArgumentParser()
 
-if len(sys.argv) == 1:
-    umake = UMake()
-    umake.run()
-else:
-    import argparse
-    parser = argparse.ArgumentParser()
+        parser.add_argument('targets', type=str, nargs="*",
+                            help='target path')
 
-    parser.add_argument('targets', type=str, nargs="*",
-                        help='target path')
+        parser.add_argument('-d', '--details', action='store_true',
+                            help='details about the target')
 
-    parser.add_argument('-d', '--details', action='store_true',
-                        help='details about the target')
+        parser.add_argument('--json', action='store', dest='json_file',
+                            help='output as json')
 
-    parser.add_argument('--json', action='store', dest='json_file',
-                        help='output as json')
+        parser.add_argument('--show-all-targets', action='store_true', dest="show_all_targets",
+                            help="show all targets configured in UMakefile")
 
-    parser.add_argument('--show-all-targets', action='store_true', dest="show_all_targets",
-                        help="show all targets configured in UMakefile")
+        parser.add_argument('--show-parsed-umakefile', action='store_true', dest="show_parsed_umakefile",
+                            help="show parsed umakefile")
 
-    parser.add_argument('--show-parsed-umakefile', action='store_true', dest="show_parsed_umakefile",
-                        help="show parsed umakefile")
+        parser.add_argument('--no-remote-cache', action='store_true', dest="no_remote_cache",
+                            help="don't use remote cache")
 
-    parser.add_argument('--no-remote-cache', action='store_true', dest="no_remote_cache",
-                        help="don't use remote cache")
+        parser.add_argument('--no-local-cache', action='store_true', dest="no_local_cache",
+                            help="don't use local cache")
 
-    parser.add_argument('--no-local-cache', action='store_true', dest="no_local_cache",
-                        help="don't use local cache")
+        parser.add_argument('--remote-cache-stats', action='store_true', dest="remote_cache_stats",
+                            help="show stats of remote cache")
 
-    parser.add_argument('--remote-cache-stats', action='store_true', dest="remote_cache_stats",
-                        help="show stats of remote cache")
+        parser.add_argument('--remote-cache-delete', action='store_true', dest="remote_cache_delete",
+                            help="WARNING: delete all remote cache objects")
 
-    parser.add_argument('--remote-cache-delete', action='store_true', dest="remote_cache_delete",
-                        help="WARNING: delete all remote cache objects")
+        parser.add_argument('-v', '--variant', action='store', dest="variant",
+                            help="compile with diffrent variants")
 
-    parser.add_argument('-v', '--variant', action='store', dest="variant",
-                        help="compile with diffrent variants")
+        parser.add_argument('--clean', action='store_true', dest="clean",
+                            help="clean umake file, with all targets")
 
-    parser.add_argument('--clean', action='store_true', dest="clean",
-                        help="clean umake file, with all targets")
+        parser.add_argument('--compile-commands', action='store_true', dest="compile_commands",
+                            help="Create compile_commands.json file with info on the build")
 
-    parser.add_argument('--compile-commands', action='store_true', dest="compile_commands",
-                        help="Create compile_commands.json file with info on the build")
+        args = parser.parse_args()
 
-    args = parser.parse_args()
+        global_config.compile_commands = args.compile_commands
 
-    global_config.compile_commands = args.compile_commands
+        if args.json_file:
+            global_config.json_file = args.json_file
 
-    if args.json_file:
-        global_config.json_file = args.json_file
+        if args.no_remote_cache:
+            global_config.remote_cache = False
 
-    if args.no_remote_cache:
-        global_config.remote_cache = False
+        if args.no_local_cache:
+            global_config.local_cache = False
 
-    if args.no_local_cache:
-        global_config.local_cache = False
+        if args.remote_cache_stats:
+            mc = MinioCache()
+            mc.get_cache_stats()
+            return
 
-    if args.remote_cache_stats:
-        mc = MinioCache()
-        mc.get_cache_stats()
-        os.sys.exit(0)
+        if args.remote_cache_delete:
+            mc = MinioCache()
+            mc.clear_bucket()
+            return
 
-    if args.remote_cache_delete:
-        mc = MinioCache()
-        mc.clear_bucket()
-        os.sys.exit(0)
+        umake = UMake()
+        if args.show_all_targets:
+            self.load_graph()
+            self.show_all_targets()
 
-    umake = UMake()
-    if args.show_all_targets:
-        umake.load_graph()
-        umake.show_all_targets()
+        if args.variant:
+            global_config.variant = args.variant
+            out.variant = global_config.variant
 
-    if args.variant:
-        global_config.variant = args.variant
-        out.variant = global_config.variant
+        if args.show_parsed_umakefile:
+            self.show_parsed_umakefile()
+            return
 
-    if args.show_parsed_umakefile:
-        umake.show_parsed_umakefile()
-        os.sys.exit(0)
+        if args.clean:
+            self.load_graph()
+            self.clean()
+            return
 
-    if args.clean:
-        umake.load_graph()
-        umake.clean()
-        os.sys.exit(0)
+        if args.details:
+            args.targets = [join(ROOT, t) + "**" for t in args.targets]
+            self.show_target_details_run(args.targets)
+        else:
+            args.targets = [join(ROOT, t) for t in args.targets]
+            global_config.targets = args.targets
+            self.run()
 
-    if args.details:
-        args.targets = [join(ROOT, t) + "**" for t in args.targets]
-        umake.show_target_details_run(args.targets)
-    else:
-        args.targets = [join(ROOT, t) for t in args.targets]
-        global_config.targets = args.targets
-        umake.run()
+    def start(self):
+        if len(sys.argv) == 1:
+            self.run()
+        else:
+            self.parse_args()
 
-#set(self.graph.graph.vs.select(_degree=80))
+
+
+umake = UMake()
+umake.start()
 
 # print(profiler.output_text(color=True))

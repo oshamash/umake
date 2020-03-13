@@ -34,6 +34,13 @@ class bcolors:
     UNDERLINE = '\033[4m'
 
 
+def format_text(out_str, color: bcolors=""):
+    if is_ineractive_terminal:
+        return f"{color} {out_str} {bcolors.ENDC}"
+    else:
+        return out_str
+
+
 class AtomicInt:
     def __init__(self):
         self.num = 0
@@ -104,9 +111,8 @@ class InteractiveOutput:
     def print_colored(self, out_str, color=""):
         if is_ineractive_terminal:
             sys.stdout.write("\x1b[2K\r")
-            print(f"{color} {out_str} {bcolors.ENDC}")
-        else:
-            print(f"{out_str}")
+        print(format_text(out_str, color))
+        # print(f"{color} {out_str} {bcolors.ENDC}")
         # self.update_bar()
 
     def print_fail(self, out_str):
@@ -131,4 +137,5 @@ class InteractiveOutput:
         self.print_colored(s)
 
     def destroy(self):
+        self.update_bar()
         print()
