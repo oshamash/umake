@@ -13,8 +13,8 @@ with open('requirements.txt') as f:
 setup(
     name='umake',
     version='0',
-    packages=['umake'],
+    packages=['umake'] + find_packages(),
     install_requires=required,
     license='MIT',
-    scripts=['./umake/umake']
+    scripts=['./umake/umake'],
 )

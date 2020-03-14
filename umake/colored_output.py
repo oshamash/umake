@@ -1,27 +1,13 @@
 import sys
 import threading
-import os
-from os.path import join
-from subprocess import check_output, CalledProcessError
 from datetime import datetime
-from umake.config import UMAKE_BUILD_CACHE_MAX_SIZE_MB, ROOT, UMAKE_MAX_WORKERS
+from umake.config import UMAKE_BUILD_CACHE_MAX_SIZE_MB, UMAKE_MAX_WORKERS, UMAKE_BUILD_CACHE_DIR
+from umake.utils.fs import get_size_KB
 
-UMAKE_ROOT_DIR = join(ROOT, ".umake")
-UMKAE_TMP_DIR = join(UMAKE_ROOT_DIR, "tmp")
-UMAKE_BUILD_CACHE_DIR = join(UMAKE_ROOT_DIR, "build-cache")
 MINIMAL_ENV = {"PATH": "/usr/bin"}
-UMAKE_DB = join(UMAKE_ROOT_DIR, "db.pickle")
-
 
 file_action_fmt = "   [{action}] {filename}"
 is_ineractive_terminal = sys.stdout.isatty()
-
-def get_size_KB(path):
-    try:
-        return int(check_output(['du','-s', path]).split()[0].decode('utf-8'))
-    except CalledProcessError:
-        return 0
-
 
 class bcolors:
     HEADER = '\033[95m'
@@ -139,3 +125,7 @@ class InteractiveOutput:
     def destroy(self):
         self.update_bar()
         print()
+
+
+# To be used as a default interactive output by other modules
+out = InteractiveOutput()

@@ -1,7 +1,8 @@
 #!/usr/bin/python3.6
 import time
-from umake.colored_output import InteractiveOutput, bcolors, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, get_size_KB, UMAKE_MAX_WORKERS, UMAKE_DB, format_text
-from umake import config
+from umake.colored_output import InteractiveOutput, bcolors, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, format_text
+from umake.colored_output import out
+from umake.utils.timer import Timer
 
 # from pyinstrument import Profiler
 # profiler = Profiler()
@@ -10,67 +11,7 @@ from umake import config
 class WorkerExit:
     pass
 
-
-out = InteractiveOutput()
 worker_exit_code = WorkerExit()
-
-
-class Timer:
-    def __init__(self, msg, threshold=0, color=bcolors.OKGREEN):
-        self.msg = msg
-        self.postfix = ""
-        self.prefix = ""
-        self.threshold = threshold
-        self.color = color
-        self.log_lines = list()
-
-    def set_prefix(self, prefix):
-        self.prefix = prefix
-
-    def set_postfix(self, postfix):
-        self.postfix = postfix
-
-    def add_log_line(self, msg):
-        self.log_lines.append(msg)
-    
-    def __enter__(self):
-        self.start = time.time()
-        return self
-
-    def __exit__(self, *args):
-        self.end = time.time()
-        self.interval = self.end - self.start
-        out_str = ""
-        if self.interval > self.threshold:
-            out_str += format_text(f"[{self.interval:.3f}] {self.prefix} {self.msg} {self.postfix}", self.color)
-        if self.log_lines:
-            if out_str:
-                out_str += "\n"
-            out_str += "\n".join(self.log_lines)
-        if out_str:
-            out.print_neutarl(out_str)
-
-
-class MetadataCache:
-    def __init__(self, deps):
-        self.deps = deps
-
-
-def fs_lock(path):
-    lock_path = path + ".lock"
-    try:
-        fd = os.open(lock_path,  os.O_CREAT | os.O_EXCL)
-        return fd, lock_path
-    except FileExistsError:
-        return None, None
-
-
-def fs_unlock(fd, lock_path):
-    try:
-        os.close(fd)
-    finally:
-        os.remove(lock_path)
-
 
 with Timer("done imports"):
     from subprocess import Popen, PIPE, check_output, TimeoutExpired
@@ -90,342 +31,23 @@ with Timer("done imports"):
     from itertools import chain
     import shutil
     import sys
-    import umake.pywildcard as fnmatch
-    from minio import Minio, error  # takes 0.1 seconds, check what to do
-    from minio.helpers import (MAX_PART_SIZE,
-                      MAX_POOL_SIZE,
-                      MIN_PART_SIZE,
-                      DEFAULT_PART_SIZE,
-                      MAX_MULTIPART_COUNT)
     import urllib3
     import certifi
     import io
     import glob
 
-
-class Config:
-    def __init__(self):
-        self.json_file = None
-        self.interactive_output = False
-        self.remote_cache = True
-        self.local_cache = True
-        self.targets = []
-        self.variant = "default"
-        self.compile_commands = False
-        self.verbose = True
-
-
-global_config = Config()
-
-
-class MinioCache:
-
-    BUCKET = config.MINIO_BUCKET_NAME
-    def __init__(self):
-        self.n_timeouts = 0
-        ca_certs = certifi.where()
-        http = urllib3.PoolManager(
-                timeout=1,
-                maxsize=MAX_POOL_SIZE,
-                        cert_reqs='CERT_REQUIRED',
-                        ca_certs=ca_certs,
-                        retries=urllib3.Retry(
-                            total=3,
-                            backoff_factor=0.5,
-                            status_forcelist=[500, 502, 503, 504]
-                        )
-            )
-
-        self.mc = Minio(config.MINIO_URL,
-                        access_key=config.MINIO_ACCESS_KEY,
-                        secret_key=config.MINIO_SECRET_KEY,
-                        secure=False,
-                        http_client=http)
-
-    def _increase_timeout_and_check(self):
-        self.n_timeouts += 1
-        if self.n_timeouts >= 3:
-            out.print_fail(f"remote cache timedout {self.n_timeouts} time, disabling remote cahce")
-            global_config.remote_cache = False
-
-    def open_cache(self, cache_hash) -> MetadataCache:
-        cache_src = "md-" + cache_hash.hex()
-        try:
-            metadata_file = self.mc.get_object(bucket_name=self.BUCKET, object_name=cache_src)
-            metadata = pickle.loads(metadata_file.read())
-            return metadata
-        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
-            self._increase_timeout_and_check()
-            raise FileNotFoundError
-        except error.RequestTimeTooSkewed:
-            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
-            raise FileNotFoundError
-        except error.NoSuchKey:
-            raise FileNotFoundError
-
-    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
-        cache_src = "md-" + cache_hash.hex()
-        md = pickle.dumps(metadata_cache, protocol=pickle.HIGHEST_PROTOCOL)
-        try:
-            self.mc.put_object(bucket_name=self.BUCKET, object_name=cache_src, data=io.BytesIO(md), length=len(md))
-        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
-            self._increase_timeout_and_check()
-        except error.RequestTimeTooSkewed:
-            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
-
-    def _get_chmod(self, src):
-        if hasattr(os, 'chmod'):
-            stat_func, chmod_func = os.stat, os.chmod
-            st = os.stat(src)
-            return st.st_mode
-        else:
-            return None
-
-    def _set_chmod(self, dst, st_mode):
-        os.chmod(dst, S_IMODE(st_mode))
-
-    def _get_cache(self, deps_hash, targets):
-        if deps_hash is None:
-            return False
-        cache_src = deps_hash.hex()
-        try:
-            for target in targets:
-                f = hashlib.sha1(target.encode("ascii")).hexdigest()
-                src = join(cache_src, f)
-                obj = self.mc.fget_object(bucket_name=self.BUCKET, object_name=src, file_path=target)
-                st_mode = int(obj.metadata["X-Amz-Meta-St_mode"])
-                self._set_chmod(target, st_mode)
-        except KeyError:
-            # some cases with minio that .metadata["X-Amz-Meta-St_mode"] is not exists
-            # the file will be pushed again after compilation
-            out.print_fail("metadata not exists")
-            return False
-        except error.NoSuchKey:
-            return False
-        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
-            self._increase_timeout_and_check()
-            return False
-        except error.RequestTimeTooSkewed:
-            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
-            return False
-
-        return True
-
-    def _save_cache(self, deps_hash, targets):
-        cache_dst = deps_hash.hex()
-        # fd, lock_path = fs_lock(cache_dst)
-        # if fd == None:
-        #     return
-        try:
-            # shutil.rmtree(cache_dst, ignore_errors=True)
-            # os.mkdir(cache_dst)
-            for target in targets:
-                dst = join(cache_dst, hashlib.sha1(target.encode("ascii")).hexdigest())
-                file_attr = {"st_mode": self._get_chmod(target)}
-                self.mc.fput_object(bucket_name=self.BUCKET, object_name=dst, file_path=target, metadata=file_attr)
-        except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
-            self._increase_timeout_and_check()
-        except error.RequestTimeTooSkewed:
-            out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
-        finally:
-            # fs_unlock(fd, lock_path)
-            pass
-
-    def get_cache_stats(self):
-        bucket_size = 0
-        n_objects = 0
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
-            if obj.is_dir:
-                continue
-            bucket_size += obj.size
-            n_objects += 1
-        print(f"bucket size {int(bucket_size / 1024 / 1024)}MB, n_objects {n_objects}")
-
-    def clear_bucket(self):
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
-            self.mc.remove_object(bucket_name=self.BUCKET, object_name=obj.object_name)
-        self.get_cache_stats()
-
-
-class FsCache:
-
-    def __init__(self):
-        pass
-
-    def open_cache(self, cache_hash) -> MetadataCache:
-        cache_src = join(UMAKE_BUILD_CACHE_DIR, "md-" + cache_hash.hex())
-        with open(cache_src, "rb") as metadata_file:
-            metadata = pickle.load(metadata_file)
-            return metadata
-
-
-    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
-        cache_src = join(UMAKE_BUILD_CACHE_DIR, "md-" + cache_hash.hex())
-        with open(cache_src, "wb") as metadata_file:
-            pickle.dump(metadata_cache, metadata_file, protocol=pickle.HIGHEST_PROTOCOL)
-
-    def _get_cache(self, deps_hash, targets):
-        if deps_hash is None:
-            return False
-        cache_src = join(UMAKE_BUILD_CACHE_DIR, deps_hash.hex())
-        try:
-            for target in targets:
-                f = hashlib.sha1(target.encode("ascii")).hexdigest()
-                src = join(cache_src, f)
-                shutil.copyfile(src, target)
-                shutil.copymode(src, target)
-        except FileNotFoundError:
-            shutil.rmtree(cache_src, ignore_errors=True)
-            return False
-
-        return True
-
-    def _save_cache(self, deps_hash, targets):
-        cache_dst = join(UMAKE_BUILD_CACHE_DIR, deps_hash.hex())
-        fd, lock_path = fs_lock(cache_dst)
-        if fd == None:
-            return
-        try:
-            shutil.rmtree(cache_dst, ignore_errors=True)
-            os.mkdir(cache_dst)
-            for target in targets:
-                dst = join(cache_dst, hashlib.sha1(target.encode("ascii")).hexdigest())
-                tmp_dst = f"{dst}.tmp"
-                # do "atomic" copy, in case the copy is interferred
-                shutil.copyfile(target, tmp_dst)
-                shutil.copymode(target, tmp_dst)
-                os.rename(tmp_dst, dst)
-        finally:
-            fs_unlock(fd, lock_path)
-
-    def gc(self):
-        def remove(path):
-            """ param <path> could either be relative or absolute. """
-            if os.path.isfile(path):
-                os.remove(path)  # remove the file
-            elif os.path.isdir(path):
-                shutil.rmtree(path)  # remove dir and all contains
-            else:
-                raise ValueError("file {} is not a file or dir.".format(path))
-
-        with Timer("done cache gc") as timer:
-            cache_dir_size_KB = get_size_KB(UMAKE_BUILD_CACHE_DIR)
-            high_thresh = cache_dir_size_KB * 1.1
-            low_tresh = UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 * 0.6
-
-            if UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 > high_thresh:
-                return
-
-            fd, lock_path = fs_lock(UMAKE_BUILD_CACHE_DIR)
-            if fd == None:
-                out.print_fail(f"\tcahce: {UMAKE_BUILD_CACHE_LOCK} is locked")
-                return
-            try:
-                cache_dir = check_output(['ls', '-lru', '--sort=time', UMAKE_BUILD_CACHE_DIR]).decode('utf-8')
-                for cache_line in cache_dir.splitlines():
-                    try:
-                        _, _, _, _, _, _, _, _, cache_entry_name = cache_line.split()
-                        cache_entry_full_path = join(UMAKE_BUILD_CACHE_DIR, cache_entry_name)
-                        remove(cache_entry_full_path)
-                        cache_entry_size = get_size_KB(UMAKE_BUILD_CACHE_DIR)
-                        if cache_entry_size < low_tresh:
-                            break
-                    except ValueError:
-                        pass
-                timer.set_postfix(f"freed {int((cache_dir_size_KB - cache_entry_size) / 1024)}MB")
-            finally:
-                fs_unlock(fd, lock_path)
-
-
-class CacheMgr:
-
-    class CacheType(IntEnum):
-        NOT_CACHED = 0
-        LOCAL = 1
-        REMOTE = 2
-
-    fs_cache: FsCache = FsCache()
-    def __init__(self):
-        if global_config.remote_cache:
-            self.minio_cache = MinioCache()
-
-    def open_cache(self, cache_hash) -> MetadataCache:
-        try:
-            if global_config.local_cache:
-                return self.fs_cache.open_cache(cache_hash)
-            else:
-                raise FileNotFoundError
-        except FileNotFoundError:
-            if global_config.remote_cache:
-                return self.minio_cache.open_cache(cache_hash)
-            raise FileNotFoundError
-
-    def save_cache(self, cache_hash, metadata_cache: MetadataCache):
-        if global_config.local_cache:
-            self.fs_cache.save_cache(cache_hash, metadata_cache)
-        if global_config.remote_cache:
-            self.minio_cache.save_cache(cache_hash, metadata_cache)
-
-    def _get_cache(self, deps_hash, targets):
-        ret = False
-        if global_config.local_cache:
-            ret = self.fs_cache._get_cache(deps_hash, targets)
-        if ret is False:
-            if global_config.remote_cache:
-                ret = self.minio_cache._get_cache(deps_hash, targets)
-                if ret is True:
-                    return CacheMgr.CacheType.REMOTE
-        else:
-            return CacheMgr.CacheType.LOCAL
-        return CacheMgr.CacheType.NOT_CACHED
-
-    def _save_cache(self, deps_hash, targets, local_only=False):
-        if global_config.local_cache:
-            self.fs_cache._save_cache(deps_hash, targets)
-        if local_only:
-            return
-        if global_config.remote_cache:
-            self.minio_cache._save_cache(deps_hash, targets)
-
-    def gc(self):
-        self.fs_cache.gc()
-
+    import umake.pywildcard as fnmatch
+    from umake.cache.cache_mgr import CacheMgr
+    from umake.exceptions import *
+    from umake.utils.fs import fs_lock, fs_unlock, join_paths, get_size_KB
+    from umake import config
+    from umake.config import UMAKE_DB, UMAKE_MAX_WORKERS, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR
+    from umake.config import global_config
+    from umake.cache.base_cache import MetadataCache
 
 
 def byte_xor(ba1, ba2):
     return bytes([_a ^ _b for _a, _b in zip(ba1, ba2)])
-
-
-class TargetNotGeneratedErr(Exception):
-    pass
-
-
-class CompilationFailedErr(Exception):
-    pass
-
-
-class CmdFailedErr(Exception):
-    pass
-
-
-class NotFileErr(Exception):
-    pass
-
-
-class DepIsGenerated(Exception):
-    pass
-
-
-class LineParseErr(Exception):
-    pass
-
-
-class CleanExitErr(Exception):
-    pass
 
 
 class CmdExecuter:
@@ -521,7 +143,7 @@ class CmdExecuter:
                     timer.add_log_line(format_text(f"\nError:\n\t\t{stderr}", ""))
                 if stdout:
                     timer.add_log_line(format_text(f"\nt\t{stdout}", ""))
-                
+
                 raise CompilationFailedErr()
                 # TODO: print here the source of the command
             else:
@@ -569,13 +191,6 @@ class CmdExecuter:
     def get_results(self):
         return self.dep_files, self.target
 
-
-def join_paths(root, rest):
-    if rest[0] == "/":
-        ret = f"{ROOT}/{rest[1:]}"
-    else:
-        ret = f"{root}/{rest}"
-    return ret
 
 class FileEntry:
 
@@ -1300,7 +915,7 @@ class UMake:
                 for cmd in cmd_template.cmds:
                     cmds.add(cmd.cmd)
             removed_cmds = last_cmds.difference(cmds)
-            
+
             delete_nodes = set()
             for remove_cmd in removed_cmds:
                 remove_cmd_list = list(self.graph.successors(remove_cmd))
@@ -1342,7 +957,7 @@ class UMake:
         while self.worker_continue:
             executer: CmdExecuter
             executer = self.jobs_queue.get()
-            
+
             if type(executer) is WorkerExit:
                 return
 
@@ -1361,9 +976,9 @@ class UMake:
                 executer.is_ok = False
                 self._send_exits()
             out.n_active_workers.dec()
-            
+
             self.done_queue.put(executer)
-        
+
 
     def _handle_done(self, add_conns_out, del_conns_out):
         execucter: CmdExecuter
@@ -1502,7 +1117,7 @@ class UMake:
         if self.n_jobs:
             while self._handle_done(add_conns, del_conns):
                 pass
-        
+
         # start terminating threads
         self._send_exits()
 
@@ -1710,7 +1325,7 @@ class UMake:
             print(cmd_template.cmd_fmt)
             for cmd in cmd_template.cmds:
                 print(f"\t{cmd.cmd}")
-    
+
     def parse_args(self):
         import argparse
         parser = argparse.ArgumentParser()

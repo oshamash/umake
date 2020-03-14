@@ -9,6 +9,8 @@ import time
 ROOT = os.getcwd()
 COVERAGE_DIR_PATH = os.path.join(ROOT, 'coverage')
 COVEARAGE_CMD = "coverage-3.6 run -a"
+UMAKE_BIN = f"{ROOT}/../umake/umake"
+
 class TestUMake(unittest.TestCase):
 
     def setUp(self):
@@ -24,13 +26,13 @@ class TestUMake(unittest.TestCase):
     def tearDownClass(cls):
         print(f"\nCreating coverage xml from coverage/.coverage")
         check_output(f"coverage-3.6 xml -i -o {os.path.join(COVERAGE_DIR_PATH, 'coverage.xml')}", stderr=subprocess.STDOUT, shell=True)
-        
-    
+
+
     def _create_setup_simple_umake(self):
         with open('env/a.h', "w") as f:
             f.write("""
             """)
-        
+
         with open('env/a.c', "w") as f:
             f.write("""
             #include "stdio.h"
@@ -52,19 +54,19 @@ class TestUMake(unittest.TestCase):
                 return 0;
             }
             """)
-        
+
         with open('env/b.h', "w") as f:
             f.write("""
             int hello();
             """)
 
-       
+
     def _check_file_exists(self, path, check_timestamp={}, is_changed={}):
         timestamps = dict()
         for p in path:
             full_path = os.path.join("env", p)
             self.assertTrue(os.path.isfile(full_path), msg=f"path {full_path} is {os.path.isfile(full_path)}")
-            
+
             if len(is_changed):
                 timestamps[p] = os.stat(full_path).st_mtime
                 if is_changed[p] == True:
@@ -72,7 +74,7 @@ class TestUMake(unittest.TestCase):
                 else:
                     self.assertEqual(check_timestamp[p], timestamps[p], msg=f"p={p}")
         return timestamps
-    
+
     def _check_file_not_exists(self, path):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
@@ -84,9 +86,9 @@ class TestUMake(unittest.TestCase):
             variant = f"--variant {variant}"
         targets_str = ""
         if targets:
-            targets_str = " ".join(targets) 
+            targets_str = " ".join(targets)
         try:
-            print(check_output(f"{COVEARAGE_CMD} /umake/umake/umake --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8"))
+            print(check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8"))
             if should_fail:
                 self.assertTrue(False, msg="umake compiled although should fail")
         except subprocess.CalledProcessError as e:
@@ -95,17 +97,17 @@ class TestUMake(unittest.TestCase):
                 self.assertTrue(False, msg="Failed to run umake")
 
     def _assert_compilation(self, target, deps_conf=None, deps_manual=None, deps_auto_in=None):
-        print(check_output(f"{COVEARAGE_CMD} /umake/umake/umake {target} --no-local-cache --no-remote-cache --details --json json_out", shell=True, cwd="env/"))
+        print(check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} {target} --no-local-cache --no-remote-cache --details --json json_out", shell=True, cwd="env/"))
         with open("env/json_out") as f:
             deps = json.load(f)
-        
+
         deps_conf = [os.path.join(ROOT, "env", dep) for dep in deps_conf]
         self.assertEqual(deps["deps"]["configured"], deps_conf, msg="deps_conf")
         deps_manual = [os.path.join(ROOT, "env", dep) for dep in deps_manual]
         self.assertEqual(deps["deps"]["manual"], deps_manual, msg="deps_manual")
         deps_auto_in = [os.path.join(ROOT, "env", dep) for dep in deps_auto_in]
         self.assertEqual(deps["deps"]["auto_in"], deps_auto_in, msg="deps_auto_in")
-    
+
     def _rm(self, files):
         for f in files:
             os.remove(os.path.join("env", f))
@@ -234,7 +236,7 @@ int hellob_gen()
         umake += ":foreach a_use.c | proto/a_proto.pb-c.h > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
         umake += ":foreach b_notuse.c > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
         umake += ": *.o proto/*.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
-        
+
         self._compile(umake)
         timestamps = {"a_use.o": 0, "b_notuse.o": 0, "proto/a_proto.pb-c.c": 0, "proto/a_proto.pb-c.h": 0, "proto/a_proto.pb-c.o": 0, "test.so": 0}
         is_changed = {"a_use.o": True, "b_notuse.o": True, "proto/a_proto.pb-c.c": True, "proto/a_proto.pb-c.h": True, "proto/a_proto.pb-c.o": True, "test.so": True}
@@ -254,7 +256,7 @@ int hellob_gen()
         self._compile(umake)
         is_changed = {"a_use.o": True, "b_notuse.o": False, "proto/a_proto.pb-c.c": True, "proto/a_proto.pb-c.h": True, "proto/a_proto.pb-c.o": True, "test.so": True}
         timestamps = self._check_file_exists(["a_use.o", "b_notuse.o", "proto/a_proto.pb-c.c", "proto/a_proto.pb-c.h", "proto/a_proto.pb-c.o", "test.so"], check_timestamp=timestamps, is_changed=is_changed)
-        
+
         umake  = ":foreach proto/*.proto > protoc-c -I={dir} --c_out={dir} {filename} > {dir}/{noext}.pb-c.c {dir}/{noext}.pb-c.h\n"
         umake += ":foreach b_notuse.c > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
         umake += ": *.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
@@ -306,10 +308,10 @@ int hellob_gen()
         umake += ": c > ../helper_file_create.sh something d > d\n"
         self._compile(umake)
         self._check_file_exists(["a", "b", "c", "d"])
-        
+
         self._rm(["a"])
         self._compile(umake, should_fail=True)
-        
+
         """ check if c delete -> all reconstructed """
         self._create("a", "asd")
         self._compile(umake)
@@ -326,7 +328,7 @@ int hellob_gen()
         self._compile(umake, should_fail=True)
         self._check_file_exists(["a", "b", "c", "d"])
         # self._check_file_not_exists(["c"])
-        
+
         """ check all sources exists for a command """
         self._create("a", "asd")
         self._create("a1", "asd")
@@ -335,15 +337,15 @@ int hellob_gen()
         self._compile(umake)
         self._rm(["a"])
         self._compile(umake, should_fail=True)
-        
+
         self._create("a", "asd")
         self._compile(umake)
-        
+
         self._rm(["a1"])
         self._compile(umake, should_fail=True)
 
         # delete a -> b exists
-        # create a -> b exists 
+        # create a -> b exists
         # delete a1 -> b exists
 
     def test_umakefile_parsing(self):
@@ -370,7 +372,7 @@ int hellob_gen()
         self._create("a.c", "")
         self._create("b.c", "")
         self._create("c.c", "")
-        
+
         umake = ":foreach a.c b.c > gcc -g -O2 -Wall -fPIC -c {filename} -o {target} > {dir}/{noext}.o\n"
         umake += ": a.o b.o > gcc -g --shared -O2 -Wall -fPIC {filename} -o {target} > test.so\n"
         self._compile(umake)
@@ -440,7 +442,7 @@ int hellob_gen()
         self._check_file_not_exists(["a"])
 
         self._compile(umake, variant="test1", should_fail=True)
-    
+
     def test_compiling_specific_target(self):
         umake = ": > ../helper_file_create.sh something a > a\n"
         umake += ": > ../helper_file_create.sh something b > b\n"
@@ -452,7 +454,7 @@ int hellob_gen()
         self._compile(umake)
         timestamps = self._check_file_exists(["a", "b", "c", "d"], check_timestamp=timestamps, is_changed=is_changed)
         self._rm(["a", "b", "c", "d"])
-        
+
         timestamps = {"a": 0}
         is_changed = {"a": True}
         self._compile(umake, targets=["a"])
@@ -492,7 +494,7 @@ int hellob_gen()
         self._create("a.sh", "/bin/cat a && /bin/cat d && /bin/cat b && echo n >> c\n")
         self._compile(umake)
         self._assert_compilation("c", deps_conf=[], deps_manual=[], deps_auto_in=["a", "a.sh", "b", "d"])
-    
+
     def test_include(self):
         self._create("UMakfile_b", ": > ../helper_file_create.sh something b > b\n")
         umake = "[include:UMakfile_b]\n"
