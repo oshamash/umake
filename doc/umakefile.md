@@ -142,3 +142,12 @@ include another `UMakefile` into the current one.
 ```
 will open and parse `somedir/umakefile` in the current working dir context.
 
+#### `remote cache`
+Default: None
+
+configure remote cache
+```
+[remote-cache:<remote-cache-type> <hostname> <access-key> <secret-key> <bucketname>]
+```
+
+**remote-cache-type** - `minio`

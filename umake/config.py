@@ -3,12 +3,6 @@ from os.path import join
 
 CONFIG_ENV_PREFIX = 'UMAKE_CONFIG_'
 
-# Remote cache
-MINIO_URL = os.environ.get(f'{CONFIG_ENV_PREFIX}MINIO_URL', "localhost:9000")
-MINIO_ACCESS_KEY = os.environ.get(f'{CONFIG_ENV_PREFIX}MINIO_ACCESS_KEY', 'umake')
-MINIO_SECRET_KEY = os.environ.get(f'{CONFIG_ENV_PREFIX}MINIO_SECRET_KEY', 'umakeumake')
-MINIO_BUCKET_NAME = os.environ.get(f'{CONFIG_ENV_PREFIX}MINIO_BUCKET_NAME', "umake-build-cache")
-
 # Local cache
 ROOT = os.environ.get(f'{CONFIG_ENV_PREFIX}_ROOT', os.getcwd())
 UMAKE_BUILD_CACHE_MAX_SIZE_MB = int(os.environ.get(f'{CONFIG_ENV_PREFIX}LOCAL_CACHE_SIZE', '1500'))
@@ -24,12 +18,19 @@ class Config:
     def __init__(self):
         self.json_file = None
         self.interactive_output = False
-        self.remote_cache = True
         self.local_cache = True
         self.targets = []
         self.variant = "default"
         self.compile_commands = False
         self.verbose = True
+
+        self.remote_cache_config = True  # how user configured
+        # the next is result of `remote_cache_config` and if configured
+        self.remote_cache_enable = False
+        self.remote_hostname = None
+        self.remote_access_key = None
+        self.remote_secret_key = None
+        self.remote_bucket = None
 
 
 global_config = Config()

@@ -1,10 +1,12 @@
 import unittest
-from subprocess import check_output
+from subprocess import check_output, Popen
 import subprocess
 import shutil
 import os
 import json
 import time
+from minio import Minio
+import minio
 
 ROOT = os.getcwd()
 COVERAGE_DIR_PATH = os.path.join(ROOT, 'coverage')
@@ -31,6 +33,10 @@ class TestUMake(unittest.TestCase):
         shutil.rmtree("env", ignore_errors=True)
         os.mkdir("env")
         os.mkdir("env/proto")
+        try:
+            check_output("pkill -9 minio", shell=True)
+        except subprocess.CalledProcessError:
+            pass
 
     @classmethod
     def setUpClass(cls):
@@ -93,29 +99,35 @@ class TestUMake(unittest.TestCase):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
 
-    def _compile(self, umake, variant="", targets=[], should_fail=False, should_output=True, local_cache=False):
+    def _compile(self, umake, variant="", targets=[], should_fail=False, should_output=True, local_cache=False, remote_cache=False):
         with open('env/UMakefile', "w") as umakefile:
             umakefile.write(umake)
         if variant != "":
             variant = f"--variant {variant}"
         targets_str = ""
-        if targets:
-            targets_str = " ".join(targets)
+
         local_cache_conf = "--no-local-cache"
         if local_cache:
             local_cache_conf = ""
+
+        remote_cache_conf="--no-remote-cache"
+        if remote_cache:
+            remote_cache_conf = ""
+
+        if targets:
+            targets_str = " ".join(targets)
+       
         try:
             def call():
-                return check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} --no-remote-cache {local_cache_conf} {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8")
+                return check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} {remote_cache_conf} {local_cache_conf} {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8")
             if should_output:
                 print(call())
             else:
                 call()
             if should_fail:
                 self.assertTrue(False, msg="umake compiled although should fail")
-        except subprocess.CalledProcessError as e:
+        except subprocess.CalledProcessError:
             if should_fail is False:
-                # print(e)
                 self.assertTrue(False, msg="Failed to run umake")
 
     def _assert_compilation(self, target, deps_conf=None, deps_manual=None, deps_auto_in=None):
@@ -565,6 +577,35 @@ int my_func{i}()
         os.remove("env/.umake/db.pickle")
         with Timer("build - from local cache", n_files):
             self._compile(umake, should_output=False, local_cache=True)
+
+    BUCKET_NAME = "umake-bucket"
+    def _start_remote_cache_minio(self):
+        os.environ["MINIO_ACCESS_KEY"] = "umake"
+        os.environ["MINIO_SECRET_KEY"] = "umakeumake"
+        cmd = "minio server /data"
+        server = Popen(cmd, shell=True)
+        time.sleep(2)
+        self.mc = Minio("172.17.0.2:9000",access_key="umake", secret_key="umakeumake", secure=False)
+        try:
+            for obj in self.mc.list_objects(bucket_name=self.BUCKET_NAME, recursive=True):
+                self.mc.remove_object(bucket_name=self.BUCKET_NAME, object_name=obj.object_name)
+            self.mc.remove_bucket(self.BUCKET_NAME)
+        except minio.error.NoSuchBucket:
+            pass
+            
+        self.mc.make_bucket(self.BUCKET_NAME)
+        return server
+
+    def test_remote_cache(self):
+        minio_server = self._start_remote_cache_minio()
+        umake = f"[remote-cache:minio 172.17.0.2:9000 umake umakeumake {self.BUCKET_NAME}]\n"
+        umake += ": > touch f > f"
+        self._compile(umake, remote_cache=True)
+
+        self.mc.stat_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        minio_server.terminate()
+
+        
 
 if __name__ == '__main__':
     unittest.main()

@@ -61,11 +61,6 @@ This section lists all the various configurations that umake supports
 
 | Variable name                  | Description                                                |
 |--------------------------------|------------------------------------------------------------|
-| UMAKE_CONFIG_MINIO_ACCESS_KEY  | An access key (username) for minio that umake should use   |
-| UMAKE_CONFIG_MINIO_SECRET_KEY  | A secret key (password) for minio that umake should use    |
-| UMAKE_CONFIG_MINIO_BUCKET_NAME | The name of the bucket to use in minio                     |
-| UMAKE_CONFIG_MINIO_URL         | A url to use to access minio                               |
-| UMAKE_CONFIG_LOCAL_CACHE_SIZE  | The maximal size in bytes of the cache to store locally    |
 | UMAKE_CONFIG_ROOT              | The root directory in which all umake files will be stored |
 
 Real Life Examples

@@ -10,13 +10,11 @@ from minio import Minio, error  # takes 0.1 seconds, check what to do
 from minio.helpers import MAX_POOL_SIZE
 from umake.cache import base_cache
 from umake.cache.base_cache import MetadataCache
-from umake import config
 from umake.config import global_config
 from umake.colored_output import out
 
 
 class MinioCache(base_cache.Cache):
-    BUCKET = config.MINIO_BUCKET_NAME
 
     def __init__(self):
         self.n_timeouts = 0
@@ -33,9 +31,9 @@ class MinioCache(base_cache.Cache):
                         )
             )
 
-        self.mc = Minio(config.MINIO_URL,
-                        access_key=config.MINIO_ACCESS_KEY,
-                        secret_key=config.MINIO_SECRET_KEY,
+        self.mc = Minio(global_config.remote_hostname,
+                        access_key=global_config.remote_access_key,
+                        secret_key=global_config.remote_secret_key,
                         secure=False,
                         http_client=http)
 
@@ -43,12 +41,12 @@ class MinioCache(base_cache.Cache):
         self.n_timeouts += 1
         if self.n_timeouts >= 3:
             out.print_fail(f"remote cache timedout {self.n_timeouts} time, disabling remote cahce")
-            global_config.remote_cache = False
+            global_config.remote_cache_enable = False
 
     def open_cache(self, cache_hash)->MetadataCache:
         cache_src = "md-" + cache_hash.hex()
         try:
-            metadata_file = self.mc.get_object(bucket_name=self.BUCKET, object_name=cache_src)
+            metadata_file = self.mc.get_object(bucket_name=global_config.remote_bucket, object_name=cache_src)
             metadata = pickle.loads(metadata_file.read())
             return metadata
         except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
@@ -56,7 +54,7 @@ class MinioCache(base_cache.Cache):
             raise FileNotFoundError
         except error.RequestTimeTooSkewed:
             out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
+            global_config.remote_cache_enable = False
             raise FileNotFoundError
         except error.NoSuchKey:
             raise FileNotFoundError
@@ -65,12 +63,12 @@ class MinioCache(base_cache.Cache):
         cache_src = "md-" + cache_hash.hex()
         md = pickle.dumps(metadata_cache, protocol=pickle.HIGHEST_PROTOCOL)
         try:
-            self.mc.put_object(bucket_name=self.BUCKET, object_name=cache_src, data=io.BytesIO(md), length=len(md))
+            self.mc.put_object(bucket_name=global_config.remote_bucket, object_name=cache_src, data=io.BytesIO(md), length=len(md))
         except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
             self._increase_timeout_and_check()
         except error.RequestTimeTooSkewed:
             out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
+            global_config.remote_cache_enable = False
 
     def _get_chmod(self, src):
         if hasattr(os, 'chmod'):
@@ -90,7 +88,7 @@ class MinioCache(base_cache.Cache):
             for target in targets:
                 f = hashlib.sha1(target.encode("ascii")).hexdigest()
                 src = join(cache_src, f)
-                obj = self.mc.fget_object(bucket_name=self.BUCKET, object_name=src, file_path=target)
+                obj = self.mc.fget_object(bucket_name=global_config.remote_bucket, object_name=src, file_path=target)
                 st_mode = int(obj.metadata["X-Amz-Meta-St_mode"])
                 self._set_chmod(target, st_mode)
         except KeyError:
@@ -105,7 +103,7 @@ class MinioCache(base_cache.Cache):
             return False
         except error.RequestTimeTooSkewed:
             out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
+            global_config.remote_cache_enable = False
             return False
 
         return True
@@ -121,12 +119,12 @@ class MinioCache(base_cache.Cache):
             for target in targets:
                 dst = join(cache_dst, hashlib.sha1(target.encode("ascii")).hexdigest())
                 file_attr = {"st_mode": self._get_chmod(target)}
-                self.mc.fput_object(bucket_name=self.BUCKET, object_name=dst, file_path=target, metadata=file_attr)
+                self.mc.fput_object(bucket_name=global_config.remote_bucket, object_name=dst, file_path=target, metadata=file_attr)
         except (urllib3.exceptions.ReadTimeoutError, urllib3.exceptions.MaxRetryError, urllib3.exceptions.ProtocolError):
             self._increase_timeout_and_check()
         except error.RequestTimeTooSkewed:
             out.print_fail("Time on your host not configured currectlly, remote-cache is disabled")
-            global_config.remote_cache = False
+            global_config.remote_cache_enable = False
         finally:
             # fs_unlock(fd, lock_path)
             pass
@@ -134,7 +132,7 @@ class MinioCache(base_cache.Cache):
     def get_cache_stats(self):
         bucket_size = 0
         n_objects = 0
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
+        for obj in self.mc.list_objects(bucket_name=global_config.remote_bucket, recursive=True):
             if obj.is_dir:
                 continue
             bucket_size += obj.size
@@ -142,6 +140,6 @@ class MinioCache(base_cache.Cache):
         print(f"bucket size {int(bucket_size / 1024 / 1024)}MB, n_objects {n_objects}")
 
     def clear_bucket(self):
-        for obj in self.mc.list_objects(bucket_name=self.BUCKET, recursive=True):
-            self.mc.remove_object(bucket_name=self.BUCKET, object_name=obj.object_name)
+        for obj in self.mc.list_objects(bucket_name=global_config.remote_bucket, recursive=True):
+            self.mc.remove_object(bucket_name=global_config.remote_bucket, object_name=obj.object_name)
         self.get_cache_stats()

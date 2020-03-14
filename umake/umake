@@ -38,6 +38,7 @@ with Timer("done imports"):
 
     import umake.pywildcard as fnmatch
     from umake.cache.cache_mgr import CacheMgr
+    from umake.cache.minio_cache import MinioCache
     from umake.exceptions import *
     from umake.utils.fs import fs_lock, fs_unlock, join_paths, get_size_KB
     from umake import config
@@ -636,7 +637,6 @@ class UMakeFileParser():
 
         def should_line_parsing_stopped(in_variant, use_current_variant):
             return in_variant and not use_current_variant
-
         for line_num, line in enumerate(self.load_file(join(workdir, umakefile)).splitlines()):
             try:
                 foreach = False
@@ -758,7 +758,7 @@ class UMakeFileParser():
                         raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
                     if should_line_parsing_stopped(in_variant, use_current_variant):
                         continue
-                    config_name, config_value = line[1:-1].split(":")
+                    config_name, config_value = line[1:-1].split(":", 1)
                     config_name = config_name.strip()
                     config_value = config_value.strip()
                     if config_name == "variant":
@@ -774,6 +774,18 @@ class UMakeFileParser():
                             workdir = join(ROOT, config_value)
                     elif config_name == "include":
                         self.parse_file(config_value, workdir, in_variant, use_current_variant)
+                    elif config_name == "remote-cache":
+                        if global_config.remote_cache_config:
+                            remote_type, hostname, access_key, secret_pass, bucket_name = config_value.split()
+                            if remote_type == "minio":
+                                global_config.remote_hostname = hostname
+                                global_config.remote_access_key = access_key
+                                global_config.remote_secret_key = secret_pass
+                                global_config.remote_bucket = bucket_name
+                            else:
+                                raise RuntimeError(f"not supported remote cahce {remote_type}")
+
+                            global_config.remote_cache_enable = True
 
                 else:
                     raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
@@ -789,7 +801,6 @@ class UMakeFileParser():
 class UMake:
 
     def __init__(self):
-        self.cache_mgr = CacheMgr()
         self.graph = None
         self.worker_continue = True  # should wor
         self.worker_threads = list()
@@ -1191,14 +1202,18 @@ class UMake:
             return
 
         try:
-            self._start_executer_threads()
             self._init_build_dirs()
             self.load_graph()
             self.scan_fs()
             # profiler.start()
             self.parse_cmd_files()
             # profiler.stop()
-            self.execute_graph()
+            try:
+                self._start_executer_threads()
+                self.cache_mgr = CacheMgr()
+                self.execute_graph()
+            finally:
+                self._exit_nicelly()
             # print(profiler.output_text(color=True, show_all=True))
             self.dump_graph()
             if global_config.compile_commands:
@@ -1214,8 +1229,6 @@ class UMake:
             os.sys.exit(-1)
         finally:
             fs_unlock(fd, lock_path)
-            self._exit_nicelly()
-            out.destroy()
 
     def show_target_details(self, target):
         target_fentry: FileEntry
@@ -1374,7 +1387,7 @@ class UMake:
             global_config.json_file = args.json_file
 
         if args.no_remote_cache:
-            global_config.remote_cache = False
+            global_config.remote_cache_config = False
 
         if args.no_local_cache:
             global_config.local_cache = False
@@ -1389,7 +1402,6 @@ class UMake:
             mc.clear_bucket()
             return
 
-        umake = UMake()
         if args.show_all_targets:
             self.load_graph()
             self.show_all_targets()
@@ -1420,6 +1432,7 @@ class UMake:
             self.run()
         else:
             self.parse_args()
+        out.destroy()
 
 
 
