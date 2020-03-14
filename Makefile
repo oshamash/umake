@@ -1,8 +1,8 @@
 
 
-.PHONY: test enter
+.PHONY: test enter benchmark
 
-IMAGE=grisha85/umake:1
+IMAGE=grisha85/umake:2
 
 build-docker:
 	docker build -t ${IMAGE} .
@@ -16,3 +16,5 @@ lint:
 enter:
 	docker run --rm --privileged -it -v`pwd`:/umake -w/umake ${IMAGE} bash
 
+benchmark:
+	docker run --rm --privileged -it -v`pwd`:/umake -w/umake ${IMAGE} bash -c 'cd test && python3 ./test.py TestUMake.test_benchmark'

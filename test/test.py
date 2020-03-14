@@ -11,6 +11,20 @@ COVERAGE_DIR_PATH = os.path.join(ROOT, 'coverage')
 COVEARAGE_CMD = "coverage-3.6 run -a"
 UMAKE_BIN = f"{ROOT}/../umake/umake"
 
+class Timer:
+    def __init__(self, msg, iterations):
+        self.msg = msg
+        self.iterations = iterations
+
+    def __enter__(self):
+        self.start = time.time()
+        return self
+
+    def __exit__(self, *args):
+        self.end = time.time()
+        interavl = self.end - self.start 
+        print(f"[{interavl:.3f}] [{interavl/self.iterations:.5f} per iter] {self.msg}")
+
 class TestUMake(unittest.TestCase):
 
     def setUp(self):
@@ -79,7 +93,7 @@ class TestUMake(unittest.TestCase):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
 
-    def _compile(self, umake, variant="", targets=[], should_fail=False):
+    def _compile(self, umake, variant="", targets=[], should_fail=False, should_output=True, local_cache=False):
         with open('env/UMakefile', "w") as umakefile:
             umakefile.write(umake)
         if variant != "":
@@ -87,8 +101,16 @@ class TestUMake(unittest.TestCase):
         targets_str = ""
         if targets:
             targets_str = " ".join(targets)
+        local_cache_conf = "--no-local-cache"
+        if local_cache:
+            local_cache_conf = ""
         try:
-            print(check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} --no-remote-cache --no-local-cache {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8"))
+            def call():
+                return check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} --no-remote-cache {local_cache_conf} {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8")
+            if should_output:
+                print(call())
+            else:
+                call()
             if should_fail:
                 self.assertTrue(False, msg="umake compiled although should fail")
         except subprocess.CalledProcessError as e:
@@ -519,6 +541,30 @@ int hellob_gen()
         start = time.perf_counter()
         self._compile(umake, should_fail=True)
         assert time.perf_counter() - start < 5
+
+    def test_benchmark(self):
+        n_files = 300
+        umake = ""
+        for i in range(n_files):
+            self._create(f"{i}.c",
+f"""
+int x{i};
+int my_func{i}()
+{{
+    x{i}++;
+    return 0;
+}}
+""")
+            umake += f": {i}.c > gcc -g -O2 -Wall -fPIC -c {{filename}} -o {{target}} > {i}.o\n"
+        
+        with Timer("build", n_files):
+            self._compile(umake, should_output=False, local_cache=True)
+        
+        with Timer("build - null", n_files):
+            self._compile(umake, should_output=False, local_cache=True)
+        os.remove("env/.umake/db.pickle")
+        with Timer("build - from local cache", n_files):
+            self._compile(umake, should_output=False, local_cache=True)
 
 if __name__ == '__main__':
     unittest.main()

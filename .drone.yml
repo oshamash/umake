@@ -9,14 +9,10 @@ steps:
     commands:
       # /umake holds the binaries which are installed in the image.
       # refer to the dockerfile.
-      - "rm -rf /umake"
-      - "pwd"
-      - "ls -ltr"
       - "pip3 install --upgrade ."
-      - "pip3 install pyflakes"
       - "cd umake && pyflakes ."
       - "cd ../test && python3.6 test.py"
-    image: grisha85/umake:1
+    image: grisha85/umake:2
     pull: if-not-exists
 
   - name: coverage
