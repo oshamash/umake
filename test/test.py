@@ -510,11 +510,15 @@ int hellob_gen()
         self._check_file_exists(["other_dir/b"])
 
     def test_clean_exit(self):
-        umake = ": > /bin/sleep 0.5 && cat f > \n"
-        umake += ": > /bin/sleep 10 > \n"
+        # Create two parallel targets that are not related.
+        # This should make umake trigger two workers to handle the commands.
+        # The first command will fail and we want to make sure that all workers
+        # are terminated.
+        umake = ": > /bin/sleep 0.5 && false > \n"
+        umake += ": > /bin/sleep 60 > \n"
         start = time.perf_counter()
         self._compile(umake, should_fail=True)
-        assert time.perf_counter() - start < 1
+        assert time.perf_counter() - start < 5
 
 if __name__ == '__main__':
     unittest.main()
