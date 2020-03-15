@@ -12,7 +12,7 @@ steps:
       - "pip3 install --upgrade ."
       - "cd umake && pyflakes ."
       - "cd ../test && python3.6 test.py"
-    image: grisha85/umake:2
+    image: grisha85/umake:3
     pull: if-not-exists
 
   - name: coverage
