@@ -584,8 +584,8 @@ int my_func{i}()
         os.environ["MINIO_SECRET_KEY"] = "umakeumake"
         cmd = "minio server /data"
         server = Popen(cmd, shell=True)
-        time.sleep(2)
-        self.mc = Minio("172.17.0.2:9000",access_key="umake", secret_key="umakeumake", secure=False)
+        time.sleep(4)
+        self.mc = Minio("0.0.0.0:9000",access_key="umake", secret_key="umakeumake", secure=False)
         try:
             for obj in self.mc.list_objects(bucket_name=self.BUCKET_NAME, recursive=True):
                 self.mc.remove_object(bucket_name=self.BUCKET_NAME, object_name=obj.object_name)
@@ -598,7 +598,7 @@ int my_func{i}()
 
     def test_remote_cache(self):
         minio_server = self._start_remote_cache_minio()
-        umake = f"[remote-cache:minio 172.17.0.2:9000 umake umakeumake {self.BUCKET_NAME}]\n"
+        umake = f"[remote-cache:minio 0.0.0.0:9000 umake umakeumake {self.BUCKET_NAME}]\n"
         umake += ": > touch f > f"
         self._compile(umake, remote_cache=True)
 
