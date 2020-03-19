@@ -99,11 +99,12 @@ class TestUMake(unittest.TestCase):
         for p in path:
             self.assertFalse(os.path.isfile(os.path.join("env", p)))
 
-    def _compile(self, umake, variant="", targets=[], should_fail=False, should_output=True, local_cache=False, remote_cache=False):
+    def _compile(self, umake, variant=[], targets=[], should_fail=False, should_output=True, local_cache=False, remote_cache=False):
         with open('env/UMakefile', "w") as umakefile:
             umakefile.write(umake)
-        if variant != "":
-            variant = f"--variant {variant}"
+        variant_config = ""
+        if variant:
+            variant_config = f'--variant {" --variant ".join(variant)}'
         targets_str = ""
 
         local_cache_conf = "--no-local-cache"
@@ -119,7 +120,7 @@ class TestUMake(unittest.TestCase):
        
         try:
             def call():
-                return check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} {remote_cache_conf} {local_cache_conf} {variant} {targets_str}", cwd="env/", shell=True).decode("utf-8")
+                return check_output(f"{COVEARAGE_CMD} {UMAKE_BIN} {remote_cache_conf} {local_cache_conf} {variant_config} {targets_str}", cwd="env/", shell=True).decode("utf-8")
             if should_output:
                 print(call())
             else:
@@ -461,21 +462,29 @@ int hellob_gen()
     def test_variant(self):
         umake = "[variant:default]\n"
         umake += "$file = a\n"
+        umake += "!create(file1) : ../helper_file_create.sh something $file1 > $file1\n"
+        umake += ": > !create($file)\n"
         umake += "\n"
         umake += "[variant:test]\n"
         umake += "$file = b\n"
-        umake += "\n"
         umake += "!create(file1) : ../helper_file_create.sh something $file1 > $file1\n"
         umake += ": > !create($file)\n"
+        umake += "\n"
         self._compile(umake)
 
         self._check_file_exists(["a"])
+        self._check_file_not_exists(["b"])
 
-        self._compile(umake, variant="test")
+        self._compile(umake, variant=["test"])
         self._check_file_exists(["b"])
         self._check_file_not_exists(["a"])
 
-        self._compile(umake, variant="test1", should_fail=True)
+        self._compile(umake, variant=["test1"], should_fail=True)
+
+        """ test multiple variants """
+        self._compile(umake, variant=["default", "test"])
+        self._check_file_exists(["a"])
+        self._check_file_exists(["b"])
 
     def test_compiling_specific_target(self):
         umake = ": > ../helper_file_create.sh something a > a\n"

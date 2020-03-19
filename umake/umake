@@ -108,6 +108,9 @@ class CmdExecuter:
     def make(self, cache_mgr: CacheMgr, is_exiting):
         tmp_unique_name_full_path = join(UMKAE_TMP_DIR, str(uuid.uuid1()))
         with Timer(self.cmd.compile_show(), color=bcolors.WARNING) as timer:
+            if global_config.verbose:
+                timer.add_log_line(self.cmd.cmd)
+
             if self.target:
                 cache_type = cache_mgr._get_cache(self.deps_hash, self.target)
                 if cache_type > CacheMgr.CacheType.NOT_CACHED:
@@ -626,8 +629,10 @@ class UMakeFileParser():
         self.globals_vars = dict()
         self.macros = dict()
         self.configs = dict()
+        self.parsed_variants = {"default"}
         self.parse_file(filename)
         self._resolve_configs()
+        self._check_variants_usage()
 
     def _get_config(self, config_name):
         env_config_name = f"{CONFIG_ENV_PREFIX}{config_name.upper()}"
@@ -637,6 +642,11 @@ class UMakeFileParser():
         except KeyError:
             pass
         return config_value
+    
+    def _check_variants_usage(self):
+        not_exists_varaints = global_config.variant.difference(self.parsed_variants)
+        if not_exists_varaints:
+            raise CmdFailedErr(f"variant\s {not_exists_varaints} not exists, supported: {self.parsed_variants}")
 
     def _resolve_configs(self):
         config_value = self._get_config("remote_cache")
@@ -644,7 +654,7 @@ class UMakeFileParser():
             if global_config.remote_cache_config:
                 remote_type, hostname, access_key, secret_pass, bucket_name, permissions = config_value.split()
                 if permissions not in ['rw', 'ro']:
-                    raise RuntimeError(f"not supported permission {permissions}, supported are ['rw', 'ro']")
+                    raise CmdFailedErr(f"not supported permission '{permissions}', supported are ['rw', 'ro']")
                 if permissions == "rw":
                     global_config.remote_write_enable = True
                 if remote_type == "minio":
@@ -654,14 +664,14 @@ class UMakeFileParser():
                     global_config.remote_bucket = bucket_name
                     global_config.remote_cache_enable = True
                 else:
-                    raise RuntimeError(f"not supported remote cahce {remote_type}")
+                    raise CmdFailedErr(f"not supported remote cahce '{remote_type}''")
         
         config_value = self._get_config("local_cache_size")
         if config_value:
             global_config.local_cache_size = int(config_value)
 
         if self.configs:
-            RuntimeError(f"unsupported config: {self.configs}")
+            CmdFailedErr(f"unsupported config: '{self.configs}''")
 
     def load_file(self, filename):
         with open(filename, mode="r") as umakefile:
@@ -714,7 +724,7 @@ class UMakeFileParser():
                                 else:
                                     send_arg_value = sent_arg
                             except KeyError:
-                                raise RuntimeError(f"{umakefile}:{line_num} macro {macro_name} called with not exists arg: {macro_args_sent}")
+                                raise CmdFailedErr(f"{umakefile}:{line_num} macro {macro_name} called with not exists arg: {macro_args_sent}")
                             macro_body = macro_body.replace(in_macro_args, send_arg_value)
 
                         line = line.replace(macro_call, macro_body)
@@ -746,7 +756,7 @@ class UMakeFileParser():
                         source_fmt = sources_cand[1:deps_index]
                     if workdir:
                         if not os.path.isdir(workdir):
-                            RuntimeError(f"path is not directory {workdir}")
+                            CmdFailedErr(f"path is not directory {workdir}")
                         cmd_root = workdir
                     else:
                         cmd_root = ROOT
@@ -784,7 +794,7 @@ class UMakeFileParser():
                         try:
                             self.globals_vars[var_name.strip()] += f" {var_body.strip()}"
                         except KeyError:
-                            raise RuntimeError(f"{line_num}: {line}, var {var_name.strip()} was not declared")
+                            raise CmdFailedErr(f"{line_num}: {line}, var {var_name.strip()} was not declared")
                     except ValueError:
                         var_name, var_body = line.split("=", 1)
                         for var_to_replace in find_between(var_body, "$", " "):
@@ -792,7 +802,7 @@ class UMakeFileParser():
                         self.globals_vars[var_name.strip()] = var_body.strip()
                 elif line[0] == "[":
                     if line[-1] != "]":
-                        raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
+                        raise CmdFailedErr(f"{line_num}: {line} \n can't parse this line")
                     if should_line_parsing_stopped(in_variant, use_current_variant):
                         continue
                     config_name, config_value = line[1:-1].split(":", 1)
@@ -800,9 +810,10 @@ class UMakeFileParser():
                     config_value = config_value.strip()
                     if config_name == "variant":
                         if in_variant:
-                            raise RuntimeError(f"{line_num}: {line} \n cannot configure variant in variant")
+                            raise CmdFailedErr(f"{line_num}: {line} \n cannot configure variant in variant")
                         in_variant = True
-                        if global_config.variant == config_value:
+                        self.parsed_variants.add(config_value)
+                        if config_value in global_config.variant:
                             use_current_variant = True
                     elif config_name == "workdir":
                         if config_value == "/":
@@ -813,8 +824,6 @@ class UMakeFileParser():
                         self.parse_file(config_value, workdir, in_variant, use_current_variant)
                     else:
                         self.configs[config_name] = config_value
-                            
-
                 else:
                     raise RuntimeError(f"{line_num}: {line} \n can't parse this line")
 
@@ -989,7 +998,7 @@ class UMake:
             if global_config.targets:
                 all_targets_exists = any(target in all_targets for target in global_config.targets)
                 if not all_targets_exists:
-                    raise RuntimeError(f"target not exist {global_config.targets}")
+                    raise CmdFailedErr(f"target not exist {global_config.targets}")
 
     def executer_thread(self):
         cache_mgr = CacheMgr()
@@ -1248,7 +1257,8 @@ class UMake:
                 self.create_compilation_database()
             self.cache_gc()
             out.update_bar(force=True)
-        except CmdFailedErr:
+        except CmdFailedErr as e:
+            out.print_fail(e)
             os.sys.exit(-1)
         except Exception as e:
             import traceback
@@ -1398,11 +1408,18 @@ class UMake:
         parser.add_argument('--remote-cache-delete', action='store_true', dest="remote_cache_delete",
                             help="WARNING: delete all remote cache objects")
 
-        parser.add_argument('-v', '--variant', action='store', dest="variant",
+        parser.add_argument('-v', '--variant', 
+                            action='append', 
+                            type=str,
+                            dest="variant",
+                            default=[],
                             help="compile with diffrent variants")
 
         parser.add_argument('--clean', action='store_true', dest="clean",
                             help="clean umake file, with all targets")
+        
+        parser.add_argument('--verbose', action='store_true', dest="verbose",
+                            help="show verbose compilation")
 
         parser.add_argument('--compile-commands', action='store_true', dest="compile_commands",
                             help="Create compile_commands.json file with info on the build")
@@ -1410,6 +1427,9 @@ class UMake:
         args = parser.parse_args()
 
         global_config.compile_commands = args.compile_commands
+
+        if args.verbose:
+            global_config.verbose = args.verbose
 
         if args.json_file:
             global_config.json_file = args.json_file
@@ -1435,8 +1455,8 @@ class UMake:
             self.show_all_targets()
 
         if args.variant:
-            global_config.variant = args.variant
-            out.variant = global_config.variant
+            global_config.variant = set(args.variant)
+            out.variant = " ".join(global_config.variant)
 
         if args.show_parsed_umakefile:
             self.show_parsed_umakefile()
@@ -1446,7 +1466,7 @@ class UMake:
             self.load_graph()
             self.clean()
             return
-
+        
         if args.details:
             args.targets = [join(ROOT, t) + "**" for t in args.targets]
             self.show_target_details_run(args.targets)

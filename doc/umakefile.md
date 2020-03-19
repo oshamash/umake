@@ -110,9 +110,11 @@ Return to root
 
 #### `variant`
 
-Defult: "default"
+Defult: ["default"]
 
-The ability to generate diffrent variants from the same sources. For example: debug/release compilations. variant `terminated` with a `newline`
+Note: multiple variants supported
+
+The ability to generate diffrent variants from the same sources. For example: debug/release compilations. Variants are `terminated` with a `newline`. Code that is not part of a variant is always running (common to all variants).
 ```
 # varaint is terminated with newline
 [variant:default]

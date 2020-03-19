@@ -19,9 +19,9 @@ class Config:
         self.json_file = None
         self.interactive_output = False
         self.targets = []
-        self.variant = "default"
+        self.variant = {"default"}
         self.compile_commands = False
-        self.verbose = True
+        self.verbose = False
 
         self.local_cache = True
         self.local_cache_size = 1500
