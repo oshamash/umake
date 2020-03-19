@@ -36,12 +36,16 @@ Install
 
 platform: linux (tested on ubuntu 18.04)
 
-dependencies: strace, bash
+dependencies: strace, bash. python3
+
+ubuntu packages(apt-get install): build-essential python-dev libxml2 libxml2-dev zlib1g-dev
+
+for more details check the `Dockerfile` how to create environment for umake.
 
 ```
 git clone https://github.com/grisha85/umake.git
 cd umake
-pip install .
+pip3 install .
 ```
 
 Running example
