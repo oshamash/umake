@@ -598,14 +598,53 @@ int my_func{i}()
 
     def test_remote_cache(self):
         minio_server = self._start_remote_cache_minio()
-        umake = f"[remote-cache:minio 0.0.0.0:9000 umake umakeumake {self.BUCKET_NAME}]\n"
+        umake = f"[remote_cache:minio 0.0.0.0:9000 umake umakeumake {self.BUCKET_NAME} rw]\n"
         umake += ": > touch f > f"
         self._compile(umake, remote_cache=True)
 
         self.mc.stat_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        self.mc.remove_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        self._rm(["f"])
+        """ test env"""
+        os.environ["UMAKE_CONFIG_REMOTE_CACHE"] = f"minio 0.0.0.0:9000 umake umakeumake {self.BUCKET_NAME} rw"
+        umake = ": > touch f > f"
+        
+        self._compile(umake, remote_cache=True)
+
+        self.mc.stat_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        self.mc.remove_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        self._rm(["f"])
+        del os.environ["UMAKE_CONFIG_REMOTE_CACHE"]
+
+        """ read only """
+        umake = f"[remote_cache:minio 0.0.0.0:9000 umake umakeumake {self.BUCKET_NAME} ro]\n"
+        umake += ": > touch f > f"
+        self._compile(umake, remote_cache=True)
+
+        with self.assertRaises(minio.error.NoSuchKey) as context:
+            self.mc.stat_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+
+        """ no remote cache """
+        self.mc.remove_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+        self._rm(["f"])
+        umake = ": > touch f > f"
+
+        with self.assertRaises(minio.error.NoSuchKey) as context:
+            self.mc.stat_object(self.BUCKET_NAME, "md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136")
+
         minio_server.terminate()
 
-        
+    def test_local_cache(self):
+        umake = f"[local_cache_size:100]\n"
+        umake += ": > touch f > f"
+        self._compile(umake, local_cache=True)
+        assert os.path.exists("env/.umake/build-cache/md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136") == True
+
+        umake = f"[local_cache_size:0]\n"
+        umake += ": > touch f > f"
+        self._compile(umake, local_cache=True)
+        assert os.path.exists("env/.umake/build-cache/md-48b67e8fe03dc99f08de9753e3a1dae34eb0b136") == False
+
 
 if __name__ == '__main__':
     unittest.main()

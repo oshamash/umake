@@ -5,7 +5,7 @@ CONFIG_ENV_PREFIX = 'UMAKE_CONFIG_'
 
 # Local cache
 ROOT = os.environ.get(f'{CONFIG_ENV_PREFIX}_ROOT', os.getcwd())
-UMAKE_BUILD_CACHE_MAX_SIZE_MB = int(os.environ.get(f'{CONFIG_ENV_PREFIX}LOCAL_CACHE_SIZE', '1500'))
+
 
 # General
 UMAKE_MAX_WORKERS = 8
@@ -18,12 +18,14 @@ class Config:
     def __init__(self):
         self.json_file = None
         self.interactive_output = False
-        self.local_cache = True
         self.targets = []
         self.variant = "default"
         self.compile_commands = False
         self.verbose = True
 
+        self.local_cache = True
+        self.local_cache_size = 1500
+        
         self.remote_cache_config = True  # how user configured
         # the next is result of `remote_cache_config` and if configured
         self.remote_cache_enable = False
@@ -31,6 +33,7 @@ class Config:
         self.remote_access_key = None
         self.remote_secret_key = None
         self.remote_bucket = None
+        self.remote_write_enable = False
 
 
 global_config = Config()

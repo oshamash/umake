@@ -145,9 +145,32 @@ will open and parse `somedir/umakefile` in the current working dir context.
 #### `remote cache`
 Default: None
 
+Environment: UMAKE_CONFIG_REMOTE_CACHE
+
 configure remote cache
 ```
-[remote-cache:<remote-cache-type> <hostname> <access-key> <secret-key> <bucketname>]
+[remote_cache:<remote-cache-type> <uri> <access-key> <secret-key> <bucketname> <permission>]
 ```
 
-**remote-cache-type** - `minio`
+**remote-cache-type** - minio
+
+**hostname** - hostname:port
+
+**access-key** - access key (user name)
+
+**secret-key** - secret key (password)
+
+**bucketname** - bucketname
+
+**permission** - ro (read-only)/ rw (read/write)
+
+
+#### `local cache size`
+Default: 1500MB
+
+Environment: UMAKE_CONFIG_LOCAL_CACHE_SIZE
+
+configure local cache size
+```
+[local_cache_size:<MB>]
+```

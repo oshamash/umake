@@ -30,7 +30,7 @@ class CacheMgr:
     def save_cache(self, cache_hash, metadata_cache: MetadataCache):
         if global_config.local_cache:
             self.fs_cache.save_cache(cache_hash, metadata_cache)
-        if global_config.remote_cache_enable:
+        if global_config.remote_cache_enable and global_config.remote_write_enable:
             self.minio_cache.save_cache(cache_hash, metadata_cache)
 
     def _get_cache(self, deps_hash, targets):
@@ -51,7 +51,7 @@ class CacheMgr:
             self.fs_cache._save_cache(deps_hash, targets)
         if local_only:
             return
-        if global_config.remote_cache_enable:
+        if global_config.remote_cache_enable and global_config.remote_write_enable:
             self.minio_cache._save_cache(deps_hash, targets)
 
     def gc(self):

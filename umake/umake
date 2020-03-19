@@ -1,6 +1,6 @@
 #!/usr/bin/python3.6
 import time
-from umake.colored_output import InteractiveOutput, bcolors, UMAKE_BUILD_CACHE_MAX_SIZE_MB, MINIMAL_ENV, format_text
+from umake.colored_output import InteractiveOutput, bcolors, MINIMAL_ENV, format_text
 from umake.colored_output import out
 from umake.utils.timer import Timer
 
@@ -43,7 +43,7 @@ with Timer("done imports"):
     from umake.utils.fs import fs_lock, fs_unlock, join_paths, get_size_KB
     from umake import config
     from umake.config import UMAKE_DB, UMAKE_MAX_WORKERS, ROOT, UMAKE_ROOT_DIR, UMKAE_TMP_DIR, UMAKE_BUILD_CACHE_DIR
-    from umake.config import global_config
+    from umake.config import global_config, CONFIG_ENV_PREFIX
     from umake.cache.base_cache import MetadataCache
 
 
@@ -617,6 +617,7 @@ class UMakeFileParser():
     :foreach *.c > gcc {filename} -o {target} > {basename}.o
     :foreach | sdf > gcc {filename} -o {target} > {basename}.o
     """
+
     def __init__(self, filename):
         self.fielanme = filename
         self.cmds_template: [CmdTemplate] = []
@@ -624,19 +625,55 @@ class UMakeFileParser():
         self.load_file(filename)
         self.globals_vars = dict()
         self.macros = dict()
+        self.configs = dict()
         self.parse_file(filename)
+        self._resolve_configs()
+
+    def _get_config(self, config_name):
+        env_config_name = f"{CONFIG_ENV_PREFIX}{config_name.upper()}"
+        config_value = os.getenv(env_config_name, self.configs.get(config_name, False))
+        try:
+            del self.configs[config_name]
+        except KeyError:
+            pass
+        return config_value
+
+    def _resolve_configs(self):
+        config_value = self._get_config("remote_cache")
+        if config_value:
+            if global_config.remote_cache_config:
+                remote_type, hostname, access_key, secret_pass, bucket_name, permissions = config_value.split()
+                if permissions not in ['rw', 'ro']:
+                    raise RuntimeError(f"not supported permission {permissions}, supported are ['rw', 'ro']")
+                if permissions == "rw":
+                    global_config.remote_write_enable = True
+                if remote_type == "minio":
+                    global_config.remote_hostname = hostname
+                    global_config.remote_access_key = access_key
+                    global_config.remote_secret_key = secret_pass
+                    global_config.remote_bucket = bucket_name
+                    global_config.remote_cache_enable = True
+                else:
+                    raise RuntimeError(f"not supported remote cahce {remote_type}")
+        
+        config_value = self._get_config("local_cache_size")
+        if config_value:
+            global_config.local_cache_size = int(config_value)
+
+        if self.configs:
+            RuntimeError(f"unsupported config: {self.configs}")
 
     def load_file(self, filename):
         with open(filename, mode="r") as umakefile:
             return umakefile.read()
 
     def parse_file(self, umakefile, workdir=ROOT, in_variant=False, use_current_variant=False):
-
         if workdir is None:
             workdir = ROOT
 
         def should_line_parsing_stopped(in_variant, use_current_variant):
             return in_variant and not use_current_variant
+
         for line_num, line in enumerate(self.load_file(join(workdir, umakefile)).splitlines()):
             try:
                 foreach = False
@@ -774,18 +811,9 @@ class UMakeFileParser():
                             workdir = join(ROOT, config_value)
                     elif config_name == "include":
                         self.parse_file(config_value, workdir, in_variant, use_current_variant)
-                    elif config_name == "remote-cache":
-                        if global_config.remote_cache_config:
-                            remote_type, hostname, access_key, secret_pass, bucket_name = config_value.split()
-                            if remote_type == "minio":
-                                global_config.remote_hostname = hostname
-                                global_config.remote_access_key = access_key
-                                global_config.remote_secret_key = secret_pass
-                                global_config.remote_bucket = bucket_name
-                            else:
-                                raise RuntimeError(f"not supported remote cahce {remote_type}")
-
-                            global_config.remote_cache_enable = True
+                    else:
+                        self.configs[config_name] = config_value
+                            
 
                 else:
                     raise RuntimeError(f"{line_num}: {line} \n can't parse this line")

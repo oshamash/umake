@@ -5,10 +5,11 @@ import os
 from os.path import join
 from subprocess import check_output
 from .base_cache import MetadataCache
-from umake.config import UMAKE_BUILD_CACHE_DIR, UMAKE_BUILD_CACHE_MAX_SIZE_MB
+from umake.config import UMAKE_BUILD_CACHE_DIR
 from umake.colored_output import out
 from umake.utils.fs import fs_lock, fs_unlock, get_size_KB
 from umake.utils.timer import Timer
+from umake.config import global_config
 
 
 class FsCache:
@@ -74,9 +75,9 @@ class FsCache:
         with Timer("done cache gc") as timer:
             cache_dir_size_KB = get_size_KB(UMAKE_BUILD_CACHE_DIR)
             high_thresh = cache_dir_size_KB * 1.1
-            low_tresh = UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 * 0.6
+            low_tresh = global_config.local_cache_size * 1024 * 0.6
 
-            if UMAKE_BUILD_CACHE_MAX_SIZE_MB * 1024 > high_thresh:
+            if global_config.local_cache_size * 1024 > high_thresh:
                 return
 
             fd, lock_path = fs_lock(UMAKE_BUILD_CACHE_DIR)
@@ -84,6 +85,7 @@ class FsCache:
                 out.print_fail(f"\tcahce: {UMAKE_BUILD_CACHE_DIR} is locked")
                 return
             try:
+                cache_entry_size = 0
                 cache_dir = check_output(['ls', '-lru', '--sort=time', UMAKE_BUILD_CACHE_DIR]).decode('utf-8')
                 for cache_line in cache_dir.splitlines():
                     try:
