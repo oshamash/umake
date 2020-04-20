@@ -1,0 +1,27 @@
+---
+kind: pipeline
+name: default
+type: docker
+
+steps:
+  -
+    name: tests
+    commands:
+      # /umake holds the binaries which are installed in the image.
+      # refer to the dockerfile.
+      - "pip3 install --upgrade ."
+      - "cd umake && pyflakes ."
+      - "cd ../test && python3.6 test.py"
+    image: grisha85/umake:3
+    pull: if-not-exists
+
+  - name: coverage
+    image: plugins/codecov
+    settings:
+      token:
+        from_secret: CODECOV
+      required: true
+      files:
+        - "*.xml"
+      paths:
+        - test/coverage

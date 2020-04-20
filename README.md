@@ -1,20 +1,55 @@
 UMake
 =====
-**Blazing Fast. Sub scecond Modification detection. Few seconds for cached compilation**
+**Blazing Fast. Sub second Modification detection. Just a few seconds for cached compilation**
+
+![dpdk build](doc/images/dpdk-build/dpdk-build.gif)
 
 Overview
 --------
-UMake is a build system that building your projects.  
-influenced by [`tup`](http://gittup.org/tup/). 
+UMake is a build system that building your projects.
+Influenced by [`tup`](http://gittup.org/tup/). With the features below your compilation speed will be on average dramatically reduced, either after branch change either with your `CI` builds.
 
-* local cache - disk cache
-* remote cache - minio
-* auto dependency discovery using strace
-* simple configuration language
+[![codecov](https://codecov.io/gh/grisha85/umake/branch/master/graph/badge.svg)](https://codecov.io/gh/grisha85/umake/tree/master/umake)
+
+
+[![droneio](http://xrayio.com/api/badges/grisha85/umake/status.svg)](http://xrayio.com/grisha85/umake/)
+
+
+#### `Local cache`
+many base libraries in your project rarely changed, why recompile them over and over again. Local cache reduce compilation times and remote cache access.
+
+#### `Remote cache`
+If someone already compiled most of the libraries in your project, use those results.
+
+#### `Auto dependency discovery`
+makes your life easier to create build scripts no matter what your tool is: `gcc`, `protoc`, `docker build` ...
+
+
+[Detailed overview](doc/overview.md)
+
+[Cache System](doc/cache.md)
+
+[UMakefile](doc/umakefile.md)
+
+Install
+-------
+
+platform: linux (tested on ubuntu 18.04)
+
+dependencies: strace, bash. python3
+
+ubuntu packages(apt-get install): build-essential python-dev libxml2 libxml2-dev zlib1g-dev
+
+for more details check the `Dockerfile` how to create environment for umake.
+
+```
+git clone https://github.com/grisha85/umake.git
+cd umake
+pip3 install .
+```
 
 Running example
 ---------------
-
 ```
 git clone https://github.com/grisha85/umake.git
 cd umake
@@ -24,195 +59,28 @@ umake --no-remote-cache
 ./hello_world
 ```
 
-How UMake works
----------------
-* loading compilation graph (DAG) from previous build (graph is empty when built first time)
-  
-* scannig filesytem using the loaded graph to check for changes
+UMake configuration
+-------------------
+This section lists all the various configurations that umake supports
 
-  * `modified` - if file was modified on filesystem it marked as modified on the graph
-  * `deleted` - if file was deleted from the filesystem, successor target deleted as well from the filesystem and the graph
-    
+| Variable name                  | Description                                                |
+|--------------------------------|------------------------------------------------------------|
+| UMAKE_CONFIG_ROOT              | The root directory in which all umake files will be stored |
 
-* parsing UMakefile and creating new commands or updating the existing
-
-  * `deleted` - if command deleted, targets of this command deleted as well from both graph and filesystem
-  * `updated` - if command is updated, UMake will handle it as `delete` and `create`. so, target of the old command will be deleted and new target will be created when graph will be executed
-* executing the graph in parallel 
-
-  * `auto dependency detection` - updating the graph with accessed files by parsing strace logs
-  * `cache` - saving to cache. more details: [Cache System](#cache-system)
-* saving the build graph 
-
-Note: by automatically deleting `targets` when no longer needed (either `command` is delete or source file was the deleted for this `target`) UMake implementing `clean` by design. So `clean` no longer need to be mainained.
-
-UMakefile
----------
-## Rule `:`
-
-A single `command` is generated for this rule
-
-`:` source `|` manual-deps `>` cmd `>` target
-
-`manual-deps` - targets the this target depends on, helps keep a correct build order  
-`cmd` - bash command  
-`target` - the output of the command  
-  
-`{filename}` - full path filename of the source `/my/path/filename.a`  
-`{dir}` - directory containing the source `/my/path/`  
-`{noext}` - filename without extension `filename`  
-`{target}` - expanded target `helloworld.a`  
-
-Example:
-```
-: *.o > gcc {filename} -o {target} > helloworld.a
-```
-
-#### Recursive Source `**`
-recursice dependancies are support
-```
-root\
-  a\
-    a.a\
-      a.a.a
-      a.a.b
-      a.b.a
-    a.b\
-      a.b.a
-      a.b.b
-  b\
-    b
-```
-* `root/**` -> (`a.a.a`, `a.a.b`, `b`)
-* `root/a/**/*.b` -> (`a.a.b`, `a.b.b`)
-
-#### Manual Dependency `|`
-In order to maintain a correct build order (that is executed in parallel), there are use cases where manual depndecy is needed. for example: if there are `generated headers` (like when using `protobuf`) that are being later used by another `command` to generate a different target. 
+Real Life Examples
+------------------
+[DPDK build](doc/dpdk-build.md)
 
 
-## Rule `:foreach`
-Same as `:` but will create `command` for each `source` file existing on filesystem (like when we match the pettern *.o in the example above)
+Talking about UMake:
+--------------------
+This section includes link to various places around the web that reason about umake.
+We believe that by reviewing questions and opinions that other people wrote about umake one can learn more about it.
+So without further ado is here is the list:
 
-## Macro `!`
-Macros are expanded immediately (like using `#define X "hello"` in c/cpp)  
-Macros can accept input parameters (again, similar to using c/cpp macros)
+* [DriveNets blog](https://drivenets.com/blog/the-inside-story-of-how-we-optimized-our-own-build-system/)
+* [Reddit r/bazel](https://www.reddit.com/r/bazel/comments/fa084s/how_we_optimised_our_build_system_using_umake/)
+* [Reddit r/cpp](https://www.reddit.com/r/cpp/comments/f9yjxn/how_we_optimised_our_build_system_using_umake/)
+* [Reddit r/gcc](https://www.reddit.com/r/gcc/comments/faiqum/how_we_optimised_our_build_system_using_umake/)
 
-Example:
-```
-!c(includes, flags) : gcc -g -O2 -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o  
-```
-#### Default values
-`Macro` supports default values, by default they are `""`:
-```
-!c(includes, flags=-O3) : gcc -g -O2 -Wall -fPIC -c {filename} $includes $flags -o {target} > {dir}/{noext}.o  
-```
-now `!c` can be called as following:
-```
-!c(-Iinclude)       # includes = -Iinclude, flags=-O3
-!c(-Iinclude, -O0)  # includes = -Iinclude, flags=-O0
-!c()                # includes = "", flags=-O3
-```
-## Const `$`
-Consts are like macros, and can be used to parametrize calls to macros
-Example:
-```
-$libs = -lpthread
-!so($libs)
-```
-
-## Config `[<config_item>:<config_value>]`
-Configs allow to configure and changing umake execution.
-
-#### `workdir`
-Default: \<root>
-
-Change the current working directory.
-`relative paths` will now be relative to the new working dir.
-`Absoulte paths` will now be relative to the `root` (the directory where UMakefile exists).
-
-Example:
-Relative path `my_dir_a/my_dir_b` will be evaluated as `<workdir>/my_dir_a/my_dir_b`.
-However `/my_dir_a/my_dir_b` will be evaluated as `<root>/my_dir_a/my_dir_b` *regardless* of what our `workdir` is.
-
-The following rules are similar:
-
-```
-: src/packages/a > gcc > src/packages/b
-```
-```
-[workdir:src/packages]
-: a > gcc > b
-```
-Return to root
-```
-[workdir:/]
-```
-
-#### `variant`
-
-Defult: "default"
-
-The ability to generate diffrent variants from the same sources. For example: debug/release compilations. variant `terminated` with a `newline`
-```
-# varaint is terminated with newline
-[variant:default]
-$cflags = -O3
-
-[variant:debug]
-$cflags = -O0
-
-: my.c > !c($cflags) > my.o
-```
-now compile with `umake` for default variant 
-```
-umake
-```
-or
-```
-umake --variant debug
-```
-for `debug` variant.
-
-#### `include`
-Default: -
-
-include another `UMakefile` into the current one.
-```
-[include:somedir/umakefile]
-```
-will open and parse `somedir/umakefile` in the current working dir context.
-# Cache System
-Targets are being cached after creation, and checked if the target is in cache just before executing a `command`. There are two types of cache that UMake is using local(filesystem) and remote (minio). 
-
-## How Cache works
-### On Save
-* `sha1` of the target sources (those that were generated from UMakefile) are being calculated and `sha1` of the `command` itself. All dependecies files (also those that were auto detected) Saved to `md-<calculated_hash>` file.
-* `sha1` of all dependecies are calculated and the just created target is saved to `<all_dependecies_hash>/<target_name_hash>`
-### On Load
-* `sha1` of the target sources (those that were generated from UMakefile) are being calculated and `sha1` of the `command` itself. Reading `md-<calculated_hash>` for all the file dependecies
-* calculating `sha1` of all of the target dependecies (from the files system) and copying `<all_dependecies_hash>/<target_name_hash>` to the project directory as it was generated by the `command`
-
-## Local Cache
-The local cache is stored in `~/.umake/build-cache`. 
-
-## Remote Cache
-TBD
-# Arguments
-
-```
-usage: umake [-h] [--details] [--json JSON_FILE] [--no-remote-cache]
-             [--no-local-cache]
-             [target]
-
-positional arguments:
-  target             target path
-
-optional arguments:
-  -h, --help         show this help message and exit
-  --details          details about the target
-  --json JSON_FILE   output as json
-  --no-remote-cache  don't use remote cache
-  --no-local-cache   don't use local cache
-
-```
-
+Have another story to share about umake? just open a PR with a change to this list and we'll merge it in.

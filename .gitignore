@@ -1,2 +1,9 @@
 test/env/*
 __pycache__
+test/coverage/*
+test/.coverage
+example/hello.o
+example/.umake
+example/hello_world
+example/.coverage
+umake.egg-info

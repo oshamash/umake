@@ -1,3 +1,9 @@
+"""
+taken from https://github.com/agalera/python-wildcard
+LICENSE: GNU General Public License v3.0
+https://github.com/agalera/python-wildcard/blob/master/LICENSE.txt
+"""
+
 """Filename matching with shell patterns.
 
 fnmatch(FILENAME, PATTERN) matches according to the local convention.
@@ -39,9 +45,9 @@ def fnmatch(name, pat):
     if the operating system requires it.
     If you don't want this, use fnmatchcase(FILENAME, PATTERN).
     """
-    import os
-    name = os.path.normcase(name)
-    pat = os.path.normcase(pat)
+    # import os
+    # name = os.path.normcase(name)
+    # pat = os.path.normcase(pat)
     return fnmatchcase(name, pat)
 
 
