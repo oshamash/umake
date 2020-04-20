@@ -88,6 +88,18 @@ class CmdExecuter:
         path = raw_path.split('"')[1]
         return self._check_in_root(path)
 
+    def _parse_creat(self, raw_path, args):
+        """
+        1234 creat("/home/umake-user/debian-example/umake.deb", O_RDONLY|O_CLOEXEC) = 3
+        1234 creat("tar_file.tar", O_RDONLY|O_CLOEXEC) = -1 ENOENT (No such file or directory)
+        """
+        rc_index = 5 if args[4] == "=" else 4
+        rc = int(args[rc_index])
+        if not rc >= 0:
+            return None
+        path = raw_path.split('"')[1]
+        return self._check_in_root(path)
+
     def _parse_openat(self, raw_path, args):
         """
         21456 openat(AT_FDCWD, "/proc/sys/net/core/somaxconn", O_RDONLY|O_CLOEXEC) = 3
@@ -122,8 +134,8 @@ class CmdExecuter:
                     self.is_ok = True
                     self.is_from_cache = cache_type
                     return
-            strace_cmd = f"strace -o{tmp_unique_name_full_path} -f -e open,openat /bin/bash -c '{self.cmd.cmd}'"
-            self.proc = Popen(strace_cmd, env=MINIMAL_ENV, shell=True, stdout=PIPE, stderr=PIPE, cwd=self.cmd.cmd_root)
+            strace_cmd = f"strace -o{tmp_unique_name_full_path} -f -e creat,open,openat /bin/bash -c '{self.cmd.cmd}'"
+            self.proc = Popen(strace_cmd, env=os.environ, shell=True, stdout=PIPE, stderr=PIPE, cwd=self.cmd.cmd_root)
 
             while True:
                 try:
@@ -161,12 +173,14 @@ class CmdExecuter:
                 for line in strace_output.readlines():
                     args = line.split()
                     raw_path = args[1]
-                    if not (raw_path.startswith('open(') or raw_path.startswith('openat(')):
-                        continue
                     if raw_path.startswith('open('):
                         full_path = self._parse_open(raw_path, args)
-                    else:
+                    elif raw_path.startswith('openat('):
                         full_path = self._parse_openat(raw_path, args)
+                    elif raw_path.startswith('creat('):
+                        full_path = self._parse_creat(raw_path, args)
+                    else:
+                        continue
 
                     if full_path is None:
                         continue
