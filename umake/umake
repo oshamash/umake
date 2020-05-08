@@ -297,13 +297,14 @@ class Line:
 
 class Cmd:
 
-    def __init__(self, cmd, dep, manual_deps, target, line, cmd_root):
+    def __init__(self, cmd, dep, manual_deps, target, line, cmd_root, source):
         self.cmd = cmd
         self.dep = dep
         self.manual_deps = manual_deps
         self.conf_deps = set(dep)
         self.target: set = target
         self.cmd_root = cmd_root
+        self.source = source
 
         self.line: Line = line
 
@@ -501,13 +502,13 @@ class CmdTemplate:
                                         basename=os.path.basename(full_path),
                                         noext=noext,
                                         target=target)
-                self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root))
+                self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root, full_path))
             else:
                 cmd = self.cmd_fmt.format(filename=full_path,
                                             dir=dirname,
                                             basename=os.path.basename(full_path),
                                             noext=noext)
-                self.cmds.append(Cmd(cmd, deps, manual_deps, {}, self.line, self.root))
+                self.cmds.append(Cmd(cmd, deps, manual_deps, {}, self.line, self.root, full_path))
 
     def _find_target_in_all_targets(self, target_fmt, all_targets, found_targets):
         wild_card_exists = False
@@ -607,7 +608,7 @@ class CmdTemplate:
                                       target=" ".join(sorted(targets)))
             deps.update(sources)
             deps.update(generated_sources)
-            self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root))
+            self.cmds.append(Cmd(cmd, deps, manual_deps, targets, self.line, self.root, full_path))
 
 
 def find_between(string, token_start, token_end):
@@ -1218,14 +1219,11 @@ class UMake:
             if node.entry_type != FileEntry.EntryType.CMD:
                 continue
 
-            # Note that a single command might have multiple targets.
-            # Each target is a different file, thus it should be a different entry.
-            for cur_file in node.data.target:
-                cmds.append({
-                    'directory': '/',
-                    'command': str(node.data.cmd),
-                    'file': str(cur_file),
-                })
+            cmds.append({
+                'directory': '/',
+                'command': str(node.data.cmd),
+                'file': str(node.data.source),
+            })
 
         import json
         with open('compile_commands.json', 'w') as db_file:
