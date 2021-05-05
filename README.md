@@ -78,7 +78,7 @@ This section includes link to various places around the web that reason about um
 We believe that by reviewing questions and opinions that other people wrote about umake one can learn more about it.
 So without further ado is here is the list:
 
-* [DriveNets blog](https://drivenets.com/blog/the-inside-story-of-how-we-optimized-our-own-build-system/)
+* [DriveNets blog](https://drivenets.com/blog/technology-developments/the-inside-story-of-how-we-optimized-our-own-build-system/)
 * [Reddit r/bazel](https://www.reddit.com/r/bazel/comments/fa084s/how_we_optimised_our_build_system_using_umake/)
 * [Reddit r/cpp](https://www.reddit.com/r/cpp/comments/f9yjxn/how_we_optimised_our_build_system_using_umake/)
 * [Reddit r/gcc](https://www.reddit.com/r/gcc/comments/faiqum/how_we_optimised_our_build_system_using_umake/)
